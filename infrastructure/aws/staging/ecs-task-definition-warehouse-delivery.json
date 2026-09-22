@@ -30,11 +30,11 @@
             "secrets": [
                 {
                     "name": "KAFKA_USERNAME",
-                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:AmazonMSK_warehouse-delivery-REPLACE_AFTER_PULUMI_UP:username::"
+                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:AmazonMSK_warehouse-delivery-sPNmVi:username::"
                 },
                 {
                     "name": "KAFKA_PASSWORD",
-                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:AmazonMSK_warehouse-delivery-REPLACE_AFTER_PULUMI_UP:password::"
+                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:AmazonMSK_warehouse-delivery-sPNmVi:password::"
                 },
                 {
                     "name": "WAREHOUSE_CREDENTIALS_SECRET",
