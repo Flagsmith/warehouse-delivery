@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.18"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy
+
+      - name: pytest
+        run: uv run pytest -m "not integration"
+
+  docker:
+    name: Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build image
+        run: docker build -t warehouse-delivery:ci .
+
+      - name: Smoke test entrypoint
+        # With no environment the service must exit non-zero naming the first
+        # missing variable, which proves the console script, the venv and the
+        # compiled dependencies all work on this image.
+        run: |
+          set +e
+          output=$(docker run --rm warehouse-delivery:ci 2>&1)
+          exit_code=$?
+          set -e
+          echo "$output" | tail -n 3
+          test "$exit_code" -ne 0
+          echo "$output" | grep -q "ConfigError: Missing required environment variable"
