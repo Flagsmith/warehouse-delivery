@@ -29,18 +29,6 @@ make run
 | `BATCH_MAX_RECORDS` | `5000` | Records per consumed batch |
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 
-## Deployment
-
-Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` cluster, one Fargate task on ARM64, in both the staging and production accounts. There is no load balancer and nothing listens on a port: the task only makes outbound connections, to the Kafka brokers, to the ingestion Redis, and to each customer's warehouse.
-
-Pushing to `main` deploys staging; tagging `v*` deploys production. Both go through `.github/workflows/.reusable-build-push-ecr.yml`, which builds the image, fills its digest into `infrastructure/aws/<environment>/ecs-task-definition-warehouse-delivery.json` and rolls the service.
-
-`KAFKA_USERNAME` and `KAFKA_PASSWORD` come from `AmazonMSK_warehouse-delivery`, a SCRAM user separate from the one the ingestion API produces with, created by the `flagsmith/pulumi` stack. `WAREHOUSE_CREDENTIALS_SECRET` reads the `DJANGO_SECRET_KEY` field of the Flagsmith API's own `ECS-API` secret, because connection credentials are encrypted with a key derived from it — point the two at different values and nothing can be decrypted.
-
-Deploy the API side (Flagsmith/flagsmith) first. Until it is publishing connections to Redis, this service finds no warehouse for the events it reads, and discards them.
-
-Logs go to the `/ecs/warehouse-delivery` CloudWatch group. To roll back, deploy the previous image digest; there is no state in the task, and Kafka replays from the last committed offset.
-
 ## Running the image
 
 ```
@@ -51,3 +39,15 @@ docker run --rm \
   -e WAREHOUSE_CREDENTIALS_SECRET=dev \
   warehouse-delivery
 ```
+
+## Deployment
+
+Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` cluster, in staging and production. One Fargate task, no load balancer: it only connects out, to Kafka, the ingestion Redis, and customers' warehouses.
+
+- **Deploys**: a push to `main` deploys staging; a `v*` tag deploys production.
+- **Infrastructure**: the ECR repository, log group, security group, execution role, Kafka user and credentials secret all come from `flagsmith/pulumi`. Change them there, not by hand. Only the ECS service itself is created by hand.
+- **Secrets**: `WAREHOUSE_CREDENTIALS_SECRET` is shared with the Flagsmith API, which encrypts connection credentials with it. Both must read the same secret, or nothing here can decrypt them.
+- **Logs**: `/ecs/warehouse-delivery` in CloudWatch.
+- **Rollback**: deploy the previous image. The task keeps no state, and Kafka picks up from the last committed offset.
+
+Ship the API side first. Until it publishes connections to Redis, this service has nowhere to send the events it reads, and drops them.
