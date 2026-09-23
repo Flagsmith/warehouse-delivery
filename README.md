@@ -49,5 +49,3 @@ Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` 
 - **Secrets**: `WAREHOUSE_CREDENTIALS_SECRET` is shared with the Flagsmith API, which encrypts connection credentials with it. Both must read the same secret, or nothing here can decrypt them.
 - **Logs**: `/ecs/warehouse-delivery` in CloudWatch.
 - **Rollback**: deploy the previous image. The task keeps no state, and Kafka picks up from the last committed offset.
-
-Ship the API side first. Until it publishes connections to Redis, this service has nowhere to send the events it reads, and drops them.
