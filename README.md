@@ -28,6 +28,7 @@ make run
 | `KAFKA_CONSUMER_GROUP` | `warehouse-delivery` | Consumer group |
 | `BATCH_MAX_RECORDS` | `5000` | Records per consumed batch |
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
+| `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
 
 ## Running the image
 

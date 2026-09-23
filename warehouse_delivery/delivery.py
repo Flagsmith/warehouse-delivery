@@ -1,5 +1,6 @@
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import structlog
@@ -32,7 +33,7 @@ class Outcome:
 
 class DeliveryService:
     """Takes the messages from one Kafka poll and inserts them into each
-    customer's warehouse, one customer at a time.
+    customer's warehouse, several customers at a time.
 
     If a customer's warehouse rejects their events, the connection shows as
     errored in the dashboard and those events are lost; there is no retry yet.
@@ -47,6 +48,7 @@ class DeliveryService:
     def __init__(
         self,
         *,
+        concurrency: int,
         connections: WarehouseConnections,
         status_writer: ConnectionStatusWriter,
         warehouse_for: Callable[
@@ -58,6 +60,7 @@ class DeliveryService:
         self._status_writer = status_writer
         self._warehouse_for = warehouse_for
         self._clock = clock
+        self._concurrency = concurrency
 
     def deliver_batch(self, events: Sequence[Event]) -> list[Outcome]:
         groups, unattributable = group_by_environment(events)
@@ -67,10 +70,17 @@ class DeliveryService:
                 reason="no_environment_key",
                 events__count=unattributable,
             )
-        return [
-            self.deliver_for_environment(environment_key, group)
-            for environment_key, group in groups.items()
-        ]
+        if not groups:
+            return []
+        # If one insert fails on our side, the error is raised only after the
+        # other inserts have finished.
+        with ThreadPoolExecutor(
+            max_workers=min(self._concurrency, len(groups)),
+            thread_name_prefix="delivery",
+        ) as executor:
+            return list(
+                executor.map(self.deliver_for_environment, groups, groups.values())
+            )
 
     def deliver_for_environment(
         self,

@@ -64,6 +64,7 @@ def main() -> None:
             redis_client, fernet_from_secret(config.warehouse_credentials_secret)
         ),
         status_writer=RedisConnectionStatusWriter(redis_client),
+        concurrency=config.delivery_concurrency,
     )
     consumer = Consumer(consumer_settings(config))
     consumer.subscribe([config.events_topic])

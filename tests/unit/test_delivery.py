@@ -1,4 +1,5 @@
 import json
+import threading
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -31,6 +32,7 @@ OTHER = WarehouseConnection(
     credentials={"password": "pw"},
 )
 NOW = 1_758_000_000.0
+CONCURRENCY = 4
 
 
 def _event(environment_key: str, event_name: str) -> Event:
@@ -103,6 +105,7 @@ def _delivery(
     insert: Any,
 ) -> DeliveryService:
     return DeliveryService(
+        concurrency=CONCURRENCY,
         connections=FakeConnections(connections),
         status_writer=status_writer,
         warehouse_for=_warehouse_for(insert),
@@ -131,11 +134,13 @@ def test_deliver_batch__two_environments__one_insert_each_and_both_connected(
         Outcome("acme", "delivered", rows=2),
         Outcome("other", "delivered", rows=1),
     ]
-    assert insert.call_args_list == [
-        ((ACME, [events[0].payload, events[2].payload]),),
-        ((OTHER, [events[1].payload]),),
+    insert.assert_any_call(ACME, [events[0].payload, events[2].payload])
+    insert.assert_any_call(OTHER, [events[1].payload])
+    assert insert.call_count == 2
+    assert sorted(status_writer.writes) == [
+        (7, "connected", None),
+        (42, "connected", None),
     ]
-    assert status_writer.writes == [(42, "connected", None), (7, "connected", None)]
     assert log.has(
         "delivery.completed",
         environment__key="acme",
@@ -215,10 +220,12 @@ def test_deliver_batch__one_warehouse_rejects__marks_it_errored_and_delivers_the
     log: StructuredLogCapture,
 ) -> None:
     # Given acme's warehouse refuses the credentials while other's accepts
-    insert.side_effect = [
-        DeliveryError("authentication", "Authentication failed."),
-        1,
-    ]
+    def insert_or_refuse(connection: WarehouseConnection, rows: Sequence[bytes]) -> int:
+        if connection is ACME:
+            raise DeliveryError("authentication", "Authentication failed.")
+        return len(rows)
+
+    insert.side_effect = insert_or_refuse
     delivery = _delivery({"acme": ACME, "other": OTHER}, status_writer, insert)
 
     # When
@@ -232,9 +239,9 @@ def test_deliver_batch__one_warehouse_rejects__marks_it_errored_and_delivers_the
         Outcome("acme", "failed", reason="authentication"),
         Outcome("other", "delivered", rows=1),
     ]
-    assert status_writer.writes == [
-        (42, "errored", "Authentication failed."),
+    assert sorted(status_writer.writes) == [
         (7, "connected", None),
+        (42, "errored", "Authentication failed."),
     ]
     assert log.has(
         "delivery.failed",
@@ -319,6 +326,7 @@ def test_deliver_for_environment__adapter_cannot_be_built__marks_the_connection(
         )
 
     delivery = DeliveryService(
+        concurrency=CONCURRENCY,
         connections=FakeConnections({"acme": ACME}),
         status_writer=status_writer,
         warehouse_for=warehouse_for,
@@ -360,3 +368,48 @@ def test_deliver_for_environment__our_own_failure__raises_and_nothing_committed(
     with pytest.raises(RuntimeError, match="boom"):
         delivery.deliver_for_environment("acme", [_event("acme", "a1")])
     assert status_writer.writes == []
+
+
+def test_deliver_batch__two_environments__inserted_at_the_same_time(
+    status_writer: FakeStatusWriter,
+    insert: Any,
+) -> None:
+    # Given each insert waits until the other one has started, which can only
+    # happen if they run side by side
+    started = threading.Barrier(2, timeout=5)
+
+    def insert_when_both_started(
+        connection: WarehouseConnection, rows: Sequence[bytes]
+    ) -> int:
+        started.wait()
+        return len(rows)
+
+    insert.side_effect = insert_when_both_started
+    delivery = _delivery({"acme": ACME, "other": OTHER}, status_writer, insert)
+
+    # When
+    outcomes = delivery.deliver_batch([_event("acme", "a1"), _event("other", "o1")])
+
+    # Then
+    assert outcomes == [
+        Outcome("acme", "delivered", rows=1),
+        Outcome("other", "delivered", rows=1),
+    ]
+
+
+def test_deliver_batch__our_own_failure_in_one_environment__raises(
+    status_writer: FakeStatusWriter,
+    insert: Any,
+) -> None:
+    # Given one insert hits a bug on our side while the other succeeds
+    def insert_or_crash(connection: WarehouseConnection, rows: Sequence[bytes]) -> int:
+        if connection is ACME:
+            raise RuntimeError("boom")
+        return len(rows)
+
+    insert.side_effect = insert_or_crash
+    delivery = _delivery({"acme": ACME, "other": OTHER}, status_writer, insert)
+
+    # When / Then the batch must not be committed
+    with pytest.raises(RuntimeError, match="boom"):
+        delivery.deliver_batch([_event("acme", "a1"), _event("other", "o1")])

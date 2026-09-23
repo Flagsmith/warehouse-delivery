@@ -37,8 +37,8 @@ clickhouse_common.set_setting("invalid_setting_action", "drop")
 EVENTS_TABLE_NAME = "events"
 CONNECT_TIMEOUT_SECONDS = 10
 # Far more than a healthy ClickHouse needs for a few thousand rows. Kept short
-# because one Kafka batch can hold events for many customers, inserted one
-# after another, and the whole batch must finish inside the consumer's poll
+# because one Kafka batch can hold events for many customers, inserted a few
+# at a time, and the whole batch must finish inside the consumer's poll
 # interval (see kafka.MAX_POLL_INTERVAL_MS).
 INSERT_TIMEOUT_SECONDS = 60
 

@@ -24,6 +24,7 @@ class Config:
     consumer_group: str = "warehouse-delivery"
     batch_max_records: int = 5000
     batch_max_wait_seconds: float = 5.0
+    delivery_concurrency: int = 16
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -57,6 +58,9 @@ class Config:
             consumer_group=env.get("KAFKA_CONSUMER_GROUP", cls.consumer_group),
             batch_max_records=_int(env, "BATCH_MAX_RECORDS", cls.batch_max_records),
             batch_max_wait_seconds=_int(env, "BATCH_MAX_WAIT_MS", 5000) / 1000,
+            delivery_concurrency=_int(
+                env, "DELIVERY_CONCURRENCY", cls.delivery_concurrency
+            ),
         )
 
 
