@@ -39,3 +39,13 @@ docker run --rm \
   -e WAREHOUSE_CREDENTIALS_SECRET=dev \
   warehouse-delivery
 ```
+
+## Deployment
+
+Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` cluster, in staging and production. One Fargate task, no load balancer: it only connects out, to Kafka, the ingestion Redis, and customers' warehouses.
+
+- **Deploys**: a push to `main` deploys staging; a `v*` tag deploys production.
+- **Infrastructure**: the ECR repository, log group, security group, execution role, Kafka user and credentials secret all come from `flagsmith/pulumi`. Change them there, not by hand. Only the ECS service itself is created by hand.
+- **Secrets**: `WAREHOUSE_CREDENTIALS_SECRET` is shared with the Flagsmith API, which encrypts connection credentials with it. Both must read the same secret, or nothing here can decrypt them.
+- **Logs**: `/ecs/warehouse-delivery` in CloudWatch.
+- **Rollback**: deploy the previous image. The task keeps no state, and Kafka picks up from the last committed offset.

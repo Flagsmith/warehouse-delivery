@@ -1,0 +1,95 @@
+name: Build, Push & Deploy to ECS
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        description: GitHub Environment whose vars/secrets/role should be used (staging | production)
+        required: true
+
+env:
+  AWS_ECS_CLUSTER: flagsmith-experimentation
+  AWS_ECS_SERVICE: warehouse-delivery
+  AWS_ECS_CONTAINER_NAME: warehouse-delivery
+
+jobs:
+  build-push-deploy:
+    name: Build, push & deploy (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build & push image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Render ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infrastructure/aws/${{ inputs.environment }}/ecs-task-definition-warehouse-delivery.json
+          container-name: ${{ env.AWS_ECS_CONTAINER_NAME }}
+          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}@${{ steps.push.outputs.digest }}
+
+      - name: Deploy task definition to ECS service
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.AWS_ECS_SERVICE }}
+          cluster: ${{ env.AWS_ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Verify deployed task definition
+        run: |
+          EXPECTED="${{ steps.deploy.outputs.task-definition-arn }}"
+          RUNNING=$(aws ecs describe-services \
+            --cluster "$AWS_ECS_CLUSTER" \
+            --services "$AWS_ECS_SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`].taskDefinition' \
+            --output text)
+          echo "expected: $EXPECTED"
+          echo "running:  $RUNNING"
+          [ "$EXPECTED" = "$RUNNING" ]

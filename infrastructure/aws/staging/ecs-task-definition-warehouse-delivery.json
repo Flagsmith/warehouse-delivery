@@ -1,0 +1,54 @@
+{
+    "family": "warehouse-delivery",
+    "networkMode": "awsvpc",
+    "executionRoleArn": "arn:aws:iam::302456015006:role/warehouse-delivery-task-exec-role",
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "runtimePlatform": {
+        "operatingSystemFamily": "LINUX",
+        "cpuArchitecture": "ARM64"
+    },
+    "cpu": "512",
+    "memory": "1024",
+    "containerDefinitions": [
+        {
+            "name": "warehouse-delivery",
+            "image": "302456015006.dkr.ecr.eu-west-2.amazonaws.com/experimentation/warehouse-delivery:latest",
+            "cpu": 0,
+            "essential": true,
+            "environment": [
+                {
+                    "name": "KAFKA_BOOTSTRAP_SERVERS",
+                    "value": "b-1.eventsingestionkafka.gk39xl.c4.kafka.eu-west-2.amazonaws.com:9096,b-2.eventsingestionkafka.gk39xl.c4.kafka.eu-west-2.amazonaws.com:9096,b-3.eventsingestionkafka.gk39xl.c4.kafka.eu-west-2.amazonaws.com:9096"
+                },
+                {
+                    "name": "REDIS_URL",
+                    "value": "rediss://serverless-redis-cache-7u3xil.serverless.euw2.cache.amazonaws.com:6379"
+                }
+            ],
+            "secrets": [
+                {
+                    "name": "KAFKA_USERNAME",
+                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:AmazonMSK_warehouse-delivery-sPNmVi:username::"
+                },
+                {
+                    "name": "KAFKA_PASSWORD",
+                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:AmazonMSK_warehouse-delivery-sPNmVi:password::"
+                },
+                {
+                    "name": "WAREHOUSE_CREDENTIALS_SECRET",
+                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:302456015006:secret:warehouse-credentials-secret-366a072-fN3Q4B"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/warehouse-delivery",
+                    "awslogs-region": "eu-west-2",
+                    "awslogs-stream-prefix": "awslogs-warehouse-delivery"
+                }
+            }
+        }
+    ]
+}

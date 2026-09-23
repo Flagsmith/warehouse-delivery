@@ -1,0 +1,18 @@
+name: Deploy to Production
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    uses: ./.github/workflows/.reusable-build-push-ecr.yml
+    with:
+      environment: production
+    secrets: inherit
