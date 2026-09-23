@@ -106,6 +106,7 @@ def test_config_from_env__auth_none__needs_no_credentials() -> None:
         pytest.param("KAFKA_AUTH", "iam", id="auth-mode"),
         pytest.param("BATCH_MAX_RECORDS", "lots", id="integer"),
         pytest.param("REDIS_CLUSTER", "maybe", id="boolean"),
+        pytest.param("DELIVERY_CONCURRENCY", "0", id="concurrency-zero"),
     ],
 )
 def test_config_from_env__invalid_value__raises_naming_variable(
