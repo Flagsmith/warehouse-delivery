@@ -9,11 +9,11 @@ from warehouse_delivery.events import Event
 CLIENT_ID = "warehouse-delivery"
 # If we go longer than this without asking Kafka for more messages, Kafka
 # assumes we are dead and gives our partitions to another consumer. A batch
-# holds events for many environments, inserted one after another, so this has
-# to cover the whole batch. With a 60 s insert timeout and about 10 s to
-# connect, ten minutes allows for roughly eight customer hosts that have all
-# stalled in the same batch; beyond that the commit fails, the process exits
-# and the batch is redelivered.
+# holds events for many environments, inserted DELIVERY_CONCURRENCY at a time,
+# so this has to cover the whole batch. With a 60 s insert timeout and about
+# 10 s to connect, ten minutes allows for roughly eight rounds of stalled
+# hosts, about 128 at the default concurrency, in the same batch; beyond that
+# the commit fails, the process exits and the batch is redelivered.
 MAX_POLL_INTERVAL_MS = 600_000
 SESSION_TIMEOUT_MS = 45_000
 

@@ -24,6 +24,7 @@ class Config:
     consumer_group: str = "warehouse-delivery"
     batch_max_records: int = 5000
     batch_max_wait_seconds: float = 5.0
+    delivery_concurrency: int = 16
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -57,6 +58,9 @@ class Config:
             consumer_group=env.get("KAFKA_CONSUMER_GROUP", cls.consumer_group),
             batch_max_records=_int(env, "BATCH_MAX_RECORDS", cls.batch_max_records),
             batch_max_wait_seconds=_int(env, "BATCH_MAX_WAIT_MS", 5000) / 1000,
+            delivery_concurrency=_positive_int(
+                env, "DELIVERY_CONCURRENCY", cls.delivery_concurrency
+            ),
         )
 
 
@@ -88,3 +92,12 @@ def _int(env: Mapping[str, str], name: str, default: int) -> int:
         raise ConfigError(
             f"Invalid value for {name}: {raw!r} (expected an integer)"
         ) from exc
+
+
+def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
+    value = _int(env, name, default)
+    if value < 1:
+        raise ConfigError(
+            f"Invalid value for {name}: {value} (expected a positive integer)"
+        )
+    return value
