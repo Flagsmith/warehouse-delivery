@@ -29,9 +29,6 @@ class RetryQueue(Protocol):
 
 
 class KafkaRetryQueue:
-    """Writes failed deliveries to the retry topic. Nothing reads that topic
-    yet; the retry consumer comes in a later change."""
-
     def __init__(
         self,
         producer: Any,

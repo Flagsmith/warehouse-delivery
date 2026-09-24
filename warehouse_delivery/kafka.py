@@ -16,6 +16,8 @@ CLIENT_ID = "warehouse-delivery"
 # the commit fails, the process exits and the batch is redelivered.
 MAX_POLL_INTERVAL_MS = 600_000
 SESSION_TIMEOUT_MS = 45_000
+# Well inside the poll interval, so a broker that never acknowledges a retry
+# message fails the batch instead of stalling it.
 PRODUCE_TIMEOUT_MS = 30_000
 
 
@@ -38,11 +40,6 @@ def consumer_settings(config: Config) -> dict[str, Any]:
 
 
 def producer_settings(config: Config) -> dict[str, Any]:
-    """Settings for the producer that writes failed deliveries to the retry
-    topic. Idempotence stops a resend inside the client from writing an event
-    twice. The delivery timeout is kept inside the consumer's poll interval,
-    so a broker that never acknowledges fails the batch instead of stalling
-    it."""
     return {
         **_connection_settings(config),
         "enable.idempotence": True,
