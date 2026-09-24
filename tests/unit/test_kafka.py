@@ -58,6 +58,31 @@ def test_consumer_settings__auth_none__plaintext_without_credentials() -> None:
     assert settings["group.id"] == "local"
 
 
+def test_producer_settings__scram__authenticates_like_the_consumer() -> None:
+    # Given / When
+    producer = kafka.producer_settings(SCRAM)
+    consumer = kafka.consumer_settings(SCRAM)
+
+    # Then
+    for name in (
+        "bootstrap.servers",
+        "security.protocol",
+        "sasl.mechanisms",
+        "sasl.username",
+        "sasl.password",
+    ):
+        assert producer[name] == consumer[name]
+
+
+def test_producer_settings__delivery_timeout__fits_inside_the_poll_interval() -> None:
+    # Given / When
+    settings = kafka.producer_settings(SCRAM)
+
+    # Then a broker that never acknowledges fails the batch before Kafka
+    # takes our partitions away
+    assert settings["delivery.timeout.ms"] < kafka.MAX_POLL_INTERVAL_MS
+
+
 def _message(
     mocker: MockerFixture,
     *,
