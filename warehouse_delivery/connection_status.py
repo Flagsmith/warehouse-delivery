@@ -4,10 +4,10 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 # Every connection's latest outcome sits in this one Redis hash, under its
-# connection id. The API's side, shipped with the change that publishes
-# connections to Redis, reads the hash once a minute, copies each entry onto
-# the connection, and deletes it. One key means the API reads everything in a
-# single call instead of searching the whole Redis cluster for keys.
+# connection id. The API reads it when it shows connections, and removes an
+# entry when the connection's details change or the connection goes. One key
+# means the API reads everything in a single call instead of searching the
+# whole Redis cluster for keys.
 STATUS_HASH_KEY = "experimentation:warehouse_delivery_status"
 CONNECTED = "connected"
 ERRORED = "errored"
@@ -20,7 +20,7 @@ class ConnectionStatusWriter(Protocol):
 
 
 class RedisConnectionStatusWriter:
-    """Writes the outcome to Redis for the API to copy onto the connection. The
+    """Writes the outcome to Redis for the API to show on the connection. The
     connection lives in the API's Postgres, and only the API writes there."""
 
     def __init__(self, client: Any, *, clock: Callable[[], float] = time.time) -> None:
