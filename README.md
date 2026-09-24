@@ -31,6 +31,10 @@ make run
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
 
+## Kafka topics
+
+The service does not create topics. Before starting it, create the retry topic (`EXTERNAL_WAREHOUSE_RETRY_TOPIC`) with the same partition count as the events topic, and give the Kafka user write access to it. If the topic is missing, the first failed delivery stops the service without committing the batch.
+
 ## Running the image
 
 ```
