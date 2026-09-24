@@ -16,7 +16,7 @@ from warehouse_delivery.crypto import fernet_from_secret
 from warehouse_delivery.delivery import DeliveryService
 from warehouse_delivery.kafka import consumer_settings, producer_settings
 from warehouse_delivery.loops import run_delivery_loop
-from warehouse_delivery.retries import KafkaRetryQueue
+from warehouse_delivery.retries import KafkaRetryWriter
 
 logger = structlog.get_logger("warehouse")
 
@@ -65,7 +65,7 @@ def main() -> None:
             redis_client, fernet_from_secret(config.warehouse_credentials_secret)
         ),
         status_writer=RedisConnectionStatusWriter(redis_client),
-        retries=KafkaRetryQueue(
+        retry_writer=KafkaRetryWriter(
             Producer(producer_settings(config)), config.retry_topic
         ),
         concurrency=config.delivery_concurrency,

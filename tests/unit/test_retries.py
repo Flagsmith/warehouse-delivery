@@ -5,7 +5,7 @@ from confluent_kafka import KafkaError, KafkaException
 from pytest_mock import MockerFixture
 
 from warehouse_delivery.events import Event
-from warehouse_delivery.retries import KafkaRetryQueue
+from warehouse_delivery.retries import KafkaRetryWriter
 
 NOW = 1_758_000_000.123
 
@@ -33,15 +33,15 @@ def test_put__events__one_message_each_keyed_by_environment_with_attempt_headers
     producer: Any,
 ) -> None:
     # Given an event produced before the ingestion server keyed on environment
-    queue = KafkaRetryQueue(producer, "retry", clock=lambda: NOW)
+    writer = KafkaRetryWriter(producer, "retry", clock=lambda: NOW)
     events = [
         Event(key=None, payload=b'{"environment_key":"acme","event":"a1"}'),
         Event(key="acme", payload=b'{"environment_key":"acme","event":"a2"}'),
     ]
 
     # When
-    queue.put("acme", events)
-    queue.flush()
+    writer.write("acme", events)
+    writer.flush()
 
     # Then each payload goes out unchanged, keyed so the retry consumer can
     # place it without parsing
@@ -58,35 +58,35 @@ def test_put__events__one_message_each_keyed_by_environment_with_attempt_headers
 def test_flush__broker_rejects_a_message__raises(producer: Any) -> None:
     # Given the broker refuses a retry message
     _report_deliveries(producer, KafkaError(KafkaError._MSG_TIMED_OUT))
-    queue = KafkaRetryQueue(producer, "retry")
-    queue.put("acme", [Event(key="acme", payload=b"{}")])
+    writer = KafkaRetryWriter(producer, "retry")
+    writer.write("acme", [Event(key="acme", payload=b"{}")])
 
     # When / Then the batch must not be committed
     with pytest.raises(KafkaException):
-        queue.flush()
+        writer.flush()
 
 
 def test_flush__messages_still_unacknowledged__raises(producer: Any) -> None:
     # Given the broker has not answered by the flush timeout
     producer.flush.return_value = 1
-    queue = KafkaRetryQueue(producer, "retry")
-    queue.put("acme", [Event(key="acme", payload=b"{}")])
+    writer = KafkaRetryWriter(producer, "retry")
+    writer.write("acme", [Event(key="acme", payload=b"{}")])
 
     # When / Then
     with pytest.raises(KafkaException, match="not acknowledged"):
-        queue.flush()
+        writer.flush()
 
 
 def test_flush__after_a_failure__next_flush_starts_clean(producer: Any) -> None:
     # Given a flush that failed
     _report_deliveries(producer, KafkaError(KafkaError._MSG_TIMED_OUT))
-    queue = KafkaRetryQueue(producer, "retry")
-    queue.put("acme", [Event(key="acme", payload=b"{}")])
+    writer = KafkaRetryWriter(producer, "retry")
+    writer.write("acme", [Event(key="acme", payload=b"{}")])
     with pytest.raises(KafkaException):
-        queue.flush()
+        writer.flush()
 
     # When the broker recovers
     producer.flush.side_effect = None
 
     # Then the old failure is not reported again
-    queue.flush()
+    writer.flush()

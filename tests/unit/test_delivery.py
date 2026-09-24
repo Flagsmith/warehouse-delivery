@@ -94,7 +94,7 @@ def status_writer() -> FakeStatusWriter:
 
 
 @pytest.fixture()
-def retries(mocker: MockerFixture) -> Any:
+def retry_writer(mocker: MockerFixture) -> Any:
     return mocker.Mock()
 
 
@@ -109,13 +109,13 @@ def _delivery(
     connections: dict[str, WarehouseConnection | None | Exception],
     status_writer: FakeStatusWriter,
     insert: Any,
-    retries: Any = None,
+    retry_writer: Any = None,
 ) -> DeliveryService:
     return DeliveryService(
         concurrency=CONCURRENCY,
         connections=FakeConnections(connections),
         status_writer=status_writer,
-        retries=retries or Mock(),
+        retry_writer=retry_writer or Mock(),
         warehouse_for=_warehouse_for(insert),
         clock=lambda: NOW,
     )
@@ -337,7 +337,7 @@ def test_deliver_for_environment__adapter_cannot_be_built__marks_the_connection(
         concurrency=CONCURRENCY,
         connections=FakeConnections({"acme": ACME}),
         status_writer=status_writer,
-        retries=Mock(),
+        retry_writer=Mock(),
         warehouse_for=warehouse_for,
         clock=lambda: NOW,
     )
@@ -424,9 +424,9 @@ def test_deliver_batch__our_own_failure_in_one_environment__raises(
         delivery.deliver_batch([_event("acme", "a1"), _event("other", "o1")])
 
 
-def test_deliver_batch__warehouse_unavailable__events_queued_for_retry_then_flushed(
+def test_deliver_batch__warehouse_unavailable__events_written_for_retry_then_flushed(
     status_writer: FakeStatusWriter,
-    retries: Any,
+    retry_writer: Any,
     insert: Any,
     log: StructuredLogCapture,
 ) -> None:
@@ -438,26 +438,28 @@ def test_deliver_batch__warehouse_unavailable__events_queued_for_retry_then_flus
 
     insert.side_effect = insert_or_fail
     acme_events = [_event("acme", "a1"), _event("acme", "a2")]
-    delivery = _delivery({"acme": ACME, "other": OTHER}, status_writer, insert, retries)
+    delivery = _delivery(
+        {"acme": ACME, "other": OTHER}, status_writer, insert, retry_writer
+    )
 
     # When
     delivery.deliver_batch([*acme_events, _event("other", "o1")])
 
-    # Then only acme's events are queued, and stored before the batch returns
-    retries.put.assert_called_once_with("acme", acme_events)
-    retries.flush.assert_called_once_with()
+    # Then only acme's events are written, and stored before the batch returns
+    retry_writer.write.assert_called_once_with("acme", acme_events)
+    retry_writer.flush.assert_called_once_with()
     assert log.has("delivery.failed", failure__kind="unreachable")
 
 
 def test_deliver_batch__retry_flush_fails__raises_so_nothing_is_committed(
     status_writer: FakeStatusWriter,
-    retries: Any,
+    retry_writer: Any,
     insert: Any,
 ) -> None:
     # Given the retry topic cannot be written to
     insert.side_effect = DeliveryError("unreachable", "Could not connect to the host.")
-    retries.flush.side_effect = RuntimeError("brokers down")
-    delivery = _delivery({"acme": ACME}, status_writer, insert, retries)
+    retry_writer.flush.side_effect = RuntimeError("brokers down")
+    delivery = _delivery({"acme": ACME}, status_writer, insert, retry_writer)
 
     # When / Then the events are neither delivered nor stored for retry, so the
     # batch must come back after a restart

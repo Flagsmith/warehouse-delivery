@@ -18,17 +18,17 @@ FAILED_AT_HEADER = "failed_at_ms"
 FLUSH_TIMEOUT_SECONDS = PRODUCE_TIMEOUT_MS / 1000 + 5
 
 
-class RetryQueue(Protocol):
-    def put(self, environment_key: str, events: Sequence[Event]) -> None:
-        """Queues an environment's events to be delivered again later. May be
+class RetryWriter(Protocol):
+    def write(self, environment_key: str, events: Sequence[Event]) -> None:
+        """Writes an environment's events to be delivered again later. May be
         called from several threads at once."""
 
     def flush(self) -> None:
-        """Returns once everything queued is stored, or raises. Offsets must
-        not be committed past events that were queued but not stored."""
+        """Returns once everything written is stored, or raises. Offsets must
+        not be committed past events that were written but not stored."""
 
 
-class KafkaRetryQueue:
+class KafkaRetryWriter:
     def __init__(
         self,
         producer: Any,
@@ -41,7 +41,7 @@ class KafkaRetryQueue:
         self._clock = clock
         self._errors: list[KafkaError] = []
 
-    def put(self, environment_key: str, events: Sequence[Event]) -> None:
+    def write(self, environment_key: str, events: Sequence[Event]) -> None:
         headers = {
             ATTEMPTS_HEADER: b"1",
             FAILED_AT_HEADER: str(round(self._clock() * 1000)).encode(),
