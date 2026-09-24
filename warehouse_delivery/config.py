@@ -21,6 +21,7 @@ class Config:
     warehouse_credentials_secret: str
     redis_cluster: bool = True
     events_topic: str = "external_warehouse_events"
+    retry_topic: str = "external_warehouse_events_retry"
     consumer_group: str = "warehouse-delivery"
     batch_max_records: int = 5000
     batch_max_wait_seconds: float = 5.0
@@ -55,6 +56,7 @@ class Config:
             warehouse_credentials_secret=_required(env, "WAREHOUSE_CREDENTIALS_SECRET"),
             redis_cluster=_bool(env, "REDIS_CLUSTER", cls.redis_cluster),
             events_topic=env.get("EXTERNAL_WAREHOUSE_TOPIC", cls.events_topic),
+            retry_topic=env.get("EXTERNAL_WAREHOUSE_RETRY_TOPIC", cls.retry_topic),
             consumer_group=env.get("KAFKA_CONSUMER_GROUP", cls.consumer_group),
             batch_max_records=_int(env, "BATCH_MAX_RECORDS", cls.batch_max_records),
             batch_max_wait_seconds=_int(env, "BATCH_MAX_WAIT_MS", 5000) / 1000,

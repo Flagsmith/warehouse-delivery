@@ -16,6 +16,7 @@ CLIENT_ID = "warehouse-delivery"
 # the commit fails, the process exits and the batch is redelivered.
 MAX_POLL_INTERVAL_MS = 600_000
 SESSION_TIMEOUT_MS = 45_000
+PRODUCE_TIMEOUT_MS = 30_000
 
 
 def consumer_settings(config: Config) -> dict[str, Any]:
@@ -25,15 +26,34 @@ def consumer_settings(config: Config) -> dict[str, Any]:
     Only the loop tells Kafka which messages are done, after every customer in
     a batch has been handled. The client never does it on its own, because
     that could mark messages done that were never inserted."""
-    settings: dict[str, Any] = {
-        "bootstrap.servers": config.kafka_bootstrap_servers,
-        "client.id": CLIENT_ID,
+    return {
+        **_connection_settings(config),
         "group.id": config.consumer_group,
         "enable.auto.commit": False,
         "auto.offset.reset": "earliest",
         "max.poll.interval.ms": MAX_POLL_INTERVAL_MS,
         "session.timeout.ms": SESSION_TIMEOUT_MS,
         "partition.assignment.strategy": "cooperative-sticky",
+    }
+
+
+def producer_settings(config: Config) -> dict[str, Any]:
+    """Settings for the producer that writes failed deliveries to the retry
+    topic. Idempotence stops a resend inside the client from writing an event
+    twice. The delivery timeout is kept inside the consumer's poll interval,
+    so a broker that never acknowledges fails the batch instead of stalling
+    it."""
+    return {
+        **_connection_settings(config),
+        "enable.idempotence": True,
+        "delivery.timeout.ms": PRODUCE_TIMEOUT_MS,
+    }
+
+
+def _connection_settings(config: Config) -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "bootstrap.servers": config.kafka_bootstrap_servers,
+        "client.id": CLIENT_ID,
     }
     if config.kafka_auth == "scram":
         settings.update(

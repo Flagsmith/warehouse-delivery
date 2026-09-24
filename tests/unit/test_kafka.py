@@ -58,6 +58,20 @@ def test_consumer_settings__auth_none__plaintext_without_credentials() -> None:
     assert settings["group.id"] == "local"
 
 
+def test_producer_settings__scram__same_login_and_idempotent() -> None:
+    # Given / When
+    settings = kafka.producer_settings(SCRAM)
+
+    # Then
+    assert settings["bootstrap.servers"] == "b-1.example:9096"
+    assert settings["security.protocol"] == "SASL_SSL"
+    assert settings["sasl.username"] == "delivery"
+    assert settings["enable.idempotence"] is True
+    # A broker that never acknowledges fails well inside the poll interval
+    assert settings["delivery.timeout.ms"] < kafka.MAX_POLL_INTERVAL_MS
+    assert "group.id" not in settings
+
+
 def _message(
     mocker: MockerFixture,
     *,

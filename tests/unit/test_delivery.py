@@ -76,6 +76,21 @@ def _warehouse_for(
     return warehouse_for
 
 
+class FakeRetryQueue:
+    def __init__(self, flush_error: Exception | None = None) -> None:
+        self.puts: list[tuple[str, list[Event]]] = []
+        self.flushes = 0
+        self.flush_error = flush_error
+
+    def put(self, environment_key: str, events: Sequence[Event]) -> None:
+        self.puts.append((environment_key, list(events)))
+
+    def flush(self) -> None:
+        self.flushes += 1
+        if self.flush_error is not None:
+            raise self.flush_error
+
+
 class FakeStatusWriter:
     def __init__(self, error: Exception | None = None) -> None:
         self.writes: list[tuple[int, str, str | None]] = []
@@ -93,6 +108,11 @@ def status_writer() -> FakeStatusWriter:
 
 
 @pytest.fixture()
+def retries() -> FakeRetryQueue:
+    return FakeRetryQueue()
+
+
+@pytest.fixture()
 def insert(mocker: MockerFixture) -> Any:
     insert = mocker.Mock()
     insert.side_effect = lambda connection, rows: len(rows)
@@ -103,11 +123,13 @@ def _delivery(
     connections: dict[str, WarehouseConnection | None | Exception],
     status_writer: FakeStatusWriter,
     insert: Any,
+    retries: FakeRetryQueue | None = None,
 ) -> DeliveryService:
     return DeliveryService(
         concurrency=CONCURRENCY,
         connections=FakeConnections(connections),
         status_writer=status_writer,
+        retries=retries or FakeRetryQueue(),
         warehouse_for=_warehouse_for(insert),
         clock=lambda: NOW,
     )
@@ -329,6 +351,7 @@ def test_deliver_for_environment__adapter_cannot_be_built__marks_the_connection(
         concurrency=CONCURRENCY,
         connections=FakeConnections({"acme": ACME}),
         status_writer=status_writer,
+        retries=FakeRetryQueue(),
         warehouse_for=warehouse_for,
         clock=lambda: NOW,
     )
@@ -413,3 +436,43 @@ def test_deliver_batch__our_own_failure_in_one_environment__raises(
     # When / Then the batch must not be committed
     with pytest.raises(RuntimeError, match="boom"):
         delivery.deliver_batch([_event("acme", "a1"), _event("other", "o1")])
+
+
+def test_deliver_batch__warehouse_unavailable__events_queued_for_retry_then_flushed(
+    status_writer: FakeStatusWriter,
+    retries: FakeRetryQueue,
+    insert: Any,
+    log: StructuredLogCapture,
+) -> None:
+    # Given acme's warehouse cannot be reached while other's accepts
+    def insert_or_fail(connection: WarehouseConnection, rows: Sequence[bytes]) -> int:
+        if connection is ACME:
+            raise DeliveryError("unreachable", "Could not connect to the host.")
+        return len(rows)
+
+    insert.side_effect = insert_or_fail
+    acme_events = [_event("acme", "a1"), _event("acme", "a2")]
+    delivery = _delivery({"acme": ACME, "other": OTHER}, status_writer, insert, retries)
+
+    # When
+    delivery.deliver_batch([*acme_events, _event("other", "o1")])
+
+    # Then only acme's events are queued, and stored before the batch returns
+    assert retries.puts == [("acme", acme_events)]
+    assert retries.flushes == 1
+    assert log.has("delivery.failed", failure__kind="unreachable")
+
+
+def test_deliver_batch__retry_flush_fails__raises_so_nothing_is_committed(
+    status_writer: FakeStatusWriter,
+    insert: Any,
+) -> None:
+    # Given the retry topic cannot be written to
+    insert.side_effect = DeliveryError("unreachable", "Could not connect to the host.")
+    retries = FakeRetryQueue(flush_error=RuntimeError("brokers down"))
+    delivery = _delivery({"acme": ACME}, status_writer, insert, retries)
+
+    # When / Then the events are neither delivered nor stored for retry, so the
+    # batch must come back after a restart
+    with pytest.raises(RuntimeError, match="brokers down"):
+        delivery.deliver_batch([_event("acme", "a1")])

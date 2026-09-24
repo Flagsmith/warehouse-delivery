@@ -25,6 +25,7 @@ def test_config_from_env__only_required_set__fills_defaults() -> None:
     assert config.redis_url == "rediss://redis.example:6379"
     assert config.warehouse_credentials_secret == "fernet-secret"
     assert config.events_topic == "external_warehouse_events"
+    assert config.retry_topic == "external_warehouse_events_retry"
     assert config.consumer_group == "warehouse-delivery"
     assert config.batch_max_records == 5000
     assert config.batch_max_wait_seconds == 5.0
@@ -38,6 +39,7 @@ def test_config_from_env__overrides_set__parses_them() -> None:
     env = {
         **REQUIRED,
         "EXTERNAL_WAREHOUSE_TOPIC": "topic",
+        "EXTERNAL_WAREHOUSE_RETRY_TOPIC": "retry-topic",
         "KAFKA_CONSUMER_GROUP": "group",
         "BATCH_MAX_RECORDS": "100",
         "BATCH_MAX_WAIT_MS": "250",
@@ -51,6 +53,7 @@ def test_config_from_env__overrides_set__parses_them() -> None:
     # Then
     assert config.redis_cluster is False
     assert config.events_topic == "topic"
+    assert config.retry_topic == "retry-topic"
     assert config.consumer_group == "group"
     assert config.batch_max_records == 100
     assert config.batch_max_wait_seconds == 0.25
