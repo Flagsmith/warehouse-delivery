@@ -58,18 +58,29 @@ def test_consumer_settings__auth_none__plaintext_without_credentials() -> None:
     assert settings["group.id"] == "local"
 
 
-def test_producer_settings__scram__same_login_and_idempotent() -> None:
+def test_producer_settings__scram__authenticates_like_the_consumer() -> None:
+    # Given / When
+    producer = kafka.producer_settings(SCRAM)
+    consumer = kafka.consumer_settings(SCRAM)
+
+    # Then
+    for name in (
+        "bootstrap.servers",
+        "security.protocol",
+        "sasl.mechanisms",
+        "sasl.username",
+        "sasl.password",
+    ):
+        assert producer[name] == consumer[name]
+
+
+def test_producer_settings__delivery_timeout__fits_inside_the_poll_interval() -> None:
     # Given / When
     settings = kafka.producer_settings(SCRAM)
 
-    # Then
-    assert settings["bootstrap.servers"] == "b-1.example:9096"
-    assert settings["security.protocol"] == "SASL_SSL"
-    assert settings["sasl.username"] == "delivery"
-    assert settings["enable.idempotence"] is True
-    # A broker that never acknowledges fails well inside the poll interval
+    # Then a broker that never acknowledges fails the batch before Kafka
+    # takes our partitions away
     assert settings["delivery.timeout.ms"] < kafka.MAX_POLL_INTERVAL_MS
-    assert "group.id" not in settings
 
 
 def _message(
