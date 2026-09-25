@@ -3,6 +3,7 @@ import signal
 import sys
 import threading
 from collections.abc import Callable, Sequence
+from functools import partial
 from typing import Any
 
 import structlog
@@ -70,6 +71,49 @@ def run_loops(loops: Sequence[Callable[[], None]], stop: threading.Event) -> Non
         raise errors[0]
 
 
+def build_delivery_service(
+    config: Config,
+    connections: RedisWarehouseConnections,
+    status_writer: RedisConnectionStatusWriter,
+) -> DeliveryService:
+    return DeliveryService(
+        connections=connections,
+        status_writer=status_writer,
+        retry_writer=KafkaRetryWriter(
+            Producer(producer_settings(config)),
+            config.retry_topic,
+            max_retries=config.max_retries,
+        ),
+        concurrency=config.delivery_concurrency,
+    )
+
+
+def run_consumer(
+    config: Config,
+    topic: str,
+    group_id: str,
+    delivery_service: DeliveryService,
+    stop: threading.Event,
+) -> None:
+    structlog.contextvars.bind_contextvars(consumer__topic=topic)
+    consumer = Consumer(consumer_settings(config, group_id=group_id))
+    consumer.subscribe([topic])
+    try:
+        run_delivery_loop(
+            consumer,
+            delivery_service,
+            batch_max_records=config.batch_max_records,
+            batch_max_wait_seconds=config.batch_max_wait_seconds,
+            retry_delay_seconds=config.retry_delay_seconds,
+            stop=stop,
+        )
+    except BaseException as exc:
+        logger.error("service.failed", exc_info=exc)
+        raise
+    finally:
+        consumer.close()
+
+
 def main() -> None:
     """If either loop fails for a reason on our side, such as Redis being down
     or a bug, the process exits so ECS restarts it, and Kafka hands back the
@@ -85,41 +129,10 @@ def main() -> None:
         redis_client, fernet_from_secret(config.warehouse_credentials_secret)
     )
     status_writer = RedisConnectionStatusWriter(redis_client)
-
-    def consume(topic: str, group_id: str) -> Callable[[], None]:
-        # Each loop gets its own producer, so one loop's flush never waits on
-        # or reports the other loop's retry messages.
-        delivery_service = DeliveryService(
-            connections=connections,
-            status_writer=status_writer,
-            retry_writer=KafkaRetryWriter(
-                Producer(producer_settings(config)),
-                config.retry_topic,
-                max_attempts=config.retry_max_attempts,
-            ),
-            concurrency=config.delivery_concurrency,
-        )
-
-        def loop() -> None:
-            structlog.contextvars.bind_contextvars(consumer__topic=topic)
-            consumer = Consumer(consumer_settings(config, group_id=group_id))
-            consumer.subscribe([topic])
-            try:
-                run_delivery_loop(
-                    consumer,
-                    delivery_service,
-                    batch_max_records=config.batch_max_records,
-                    batch_max_wait_seconds=config.batch_max_wait_seconds,
-                    retry_delay_seconds=config.retry_delay_seconds,
-                    stop=stop,
-                )
-            except BaseException as exc:
-                logger.error("service.failed", exc_info=exc)
-                raise
-            finally:
-                consumer.close()
-
-        return loop
+    # Each loop gets its own producer, so one loop's flush never waits on or
+    # reports the other loop's retry messages.
+    events_delivery = build_delivery_service(config, connections, status_writer)
+    retry_delivery = build_delivery_service(config, connections, status_writer)
 
     logger.info(
         "service.started",
@@ -131,8 +144,22 @@ def main() -> None:
     try:
         run_loops(
             [
-                consume(config.events_topic, config.consumer_group),
-                consume(config.retry_topic, config.retry_consumer_group),
+                partial(
+                    run_consumer,
+                    config,
+                    config.events_topic,
+                    config.consumer_group,
+                    events_delivery,
+                    stop,
+                ),
+                partial(
+                    run_consumer,
+                    config,
+                    config.retry_topic,
+                    config.retry_consumer_group,
+                    retry_delivery,
+                    stop,
+                ),
             ],
             stop,
         )

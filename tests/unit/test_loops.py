@@ -107,7 +107,7 @@ def _retry_message(mocker: MockerFixture, failed_at: float) -> Any:
     message.key.return_value = b"acme"
     message.value.return_value = b'{"environment_key":"acme"}'
     message.headers.return_value = [
-        ("delivery_attempts", b"1"),
+        ("retry_number", b"1"),
         ("failed_at_ms", str(round(failed_at * 1000)).encode()),
     ]
     return message
@@ -197,3 +197,27 @@ def test_run_delivery_loop__stopped_while_waiting__batch_left_uncommitted(
     # Then it comes back after the restart
     delivery.deliver_batch.assert_not_called()
     consumer.commit.assert_not_called()
+
+
+def test_run_delivery_loop__failure_time_in_the_future__wait_capped_at_the_delay(
+    mocker: MockerFixture,
+) -> None:
+    # Given a failure time an hour ahead, from clock skew or a bad header
+    consumer = mocker.Mock()
+    consumer.consume.return_value = [_retry_message(mocker, NOW + 3600)]
+    delivery = mocker.Mock()
+    stop = _stop_after_one_batch(mocker, stopped_while_waiting=False)
+
+    # When
+    loops.run_delivery_loop(
+        consumer,
+        delivery,
+        batch_max_records=500,
+        batch_max_wait_seconds=2.5,
+        retry_delay_seconds=300,
+        stop=stop,
+        clock=lambda: NOW,
+    )
+
+    # Then the loop never waits long enough to be taken out of the group
+    stop.wait.assert_called_once_with(300)

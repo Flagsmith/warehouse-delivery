@@ -170,31 +170,18 @@ def test_events_from_messages__no_value__payload_is_empty_bytes(
     assert events == [Event(key="acme", payload=b"")]
 
 
-def test_events_from_messages__retry_headers__read_onto_the_event(
+def test_events_from_messages__headers__kept_on_the_event(
     mocker: MockerFixture,
 ) -> None:
     # Given a message from the retry topic
-    headers = [("delivery_attempts", b"3"), ("failed_at_ms", b"1758000000123")]
+    headers = [("retry_number", b"3"), ("failed_at_ms", b"1758000000123")]
     messages = [_message(mocker, key=b"acme", value=b"{}", headers=headers)]
 
     # When
     events = kafka.events_from_messages(messages)
 
     # Then
-    assert events == [
-        Event(key="acme", payload=b"{}", attempts=3, failed_at_ms=1758000000123)
-    ]
-
-
-def test_events_from_messages__retry_headers_unreadable__treated_as_absent(
-    mocker: MockerFixture,
-) -> None:
-    # Given headers that were not written by the retry writer
-    headers = [("delivery_attempts", b"many"), ("failed_at_ms", b"soon")]
-    messages = [_message(mocker, key=b"acme", value=b"{}", headers=headers)]
-
-    # When
-    events = kafka.events_from_messages(messages)
-
-    # Then the loop does not crash on every restart, and the event is due now
-    assert events == [Event(key="acme", payload=b"{}")]
+    assert events[0].headers == {
+        "retry_number": b"3",
+        "failed_at_ms": b"1758000000123",
+    }

@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+import structlog
 from pytest_mock import MockerFixture
 from pytest_structlog import StructuredLogCapture
 
@@ -465,3 +466,22 @@ def test_deliver_batch__retry_flush_fails__raises_so_nothing_is_committed(
     # batch must come back after a restart
     with pytest.raises(RuntimeError, match="brokers down"):
         delivery.deliver_batch([_event("acme", "a1")])
+
+
+def test_deliver_batch__caller_log_context__carried_into_worker_threads(
+    status_writer: FakeStatusWriter,
+    insert: Any,
+    log: StructuredLogCapture,
+) -> None:
+    # Given the loop has tagged its logs with the topic it reads
+    insert.side_effect = DeliveryError("unreachable", "Could not connect to the host.")
+    delivery = _delivery({"acme": ACME}, status_writer, insert)
+    structlog.contextvars.bind_contextvars(consumer__topic="retry")
+    try:
+        # When
+        delivery.deliver_batch([_event("acme", "a1")])
+    finally:
+        structlog.contextvars.clear_contextvars()
+
+    # Then the failure logged on a worker thread says which topic it was
+    assert log.has("delivery.failed", consumer__topic="retry")

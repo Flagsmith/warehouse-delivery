@@ -1,11 +1,6 @@
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
-
-# Headers the retry writer puts on every retry message: how many deliveries of
-# the event have failed so far, and when the last one did.
-ATTEMPTS_HEADER = "delivery_attempts"
-FAILED_AT_HEADER = "failed_at_ms"
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -15,8 +10,7 @@ class Event:
 
     key: str | None
     payload: bytes
-    attempts: int = 0
-    failed_at_ms: int | None = None
+    headers: dict[str, bytes | None] = field(default_factory=dict)
 
     @property
     def environment_key(self) -> str | None:

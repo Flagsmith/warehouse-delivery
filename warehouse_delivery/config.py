@@ -30,7 +30,7 @@ class Config:
     consumer_group: str = "warehouse-delivery"
     retry_consumer_group: str = "warehouse-delivery-retry"
     retry_delay_seconds: float = 300.0
-    retry_max_attempts: int = 12
+    max_retries: int = 12
     batch_max_records: int = 5000
     batch_max_wait_seconds: float = 5.0
     delivery_concurrency: int = 16
@@ -69,10 +69,11 @@ class Config:
             retry_consumer_group=env.get(
                 "KAFKA_RETRY_CONSUMER_GROUP", cls.retry_consumer_group
             ),
-            retry_delay_seconds=_retry_delay_ms(env) / 1000,
-            retry_max_attempts=_positive_int(
-                env, "RETRY_MAX_ATTEMPTS", cls.retry_max_attempts
-            ),
+            retry_delay_seconds=_retry_delay_ms(
+                env, default=round(cls.retry_delay_seconds * 1000)
+            )
+            / 1000,
+            max_retries=_positive_int(env, "MAX_RETRIES", cls.max_retries),
             batch_max_records=_int(env, "BATCH_MAX_RECORDS", cls.batch_max_records),
             batch_max_wait_seconds=_int(env, "BATCH_MAX_WAIT_MS", 5000) / 1000,
             delivery_concurrency=_positive_int(
@@ -120,8 +121,8 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
-def _retry_delay_ms(env: Mapping[str, str]) -> int:
-    value = _int(env, "RETRY_DELAY_MS", MAX_RETRY_DELAY_MS)
+def _retry_delay_ms(env: Mapping[str, str], *, default: int) -> int:
+    value = _int(env, "RETRY_DELAY_MS", default)
     if not 0 <= value <= MAX_RETRY_DELAY_MS:
         raise ConfigError(
             f"Invalid value for RETRY_DELAY_MS: {value} "

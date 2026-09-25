@@ -4,7 +4,7 @@ from typing import Any
 from confluent_kafka import KafkaError, KafkaException, Message
 
 from warehouse_delivery.config import Config
-from warehouse_delivery.events import ATTEMPTS_HEADER, FAILED_AT_HEADER, Event
+from warehouse_delivery.events import Event
 
 CLIENT_ID = "warehouse-delivery"
 # If we go longer than this without asking Kafka for more messages, Kafka
@@ -83,25 +83,14 @@ def events_from_messages(messages: Iterable[Message]) -> list[Event]:
                 continue
             raise KafkaException(error)
         key = message.key()
-        headers = dict(message.headers() or [])
         events.append(
             Event(
                 key=_decode_key(key) if isinstance(key, bytes) else key,
                 payload=message.value() or b"",
-                attempts=_header_int(headers.get(ATTEMPTS_HEADER)) or 0,
-                failed_at_ms=_header_int(headers.get(FAILED_AT_HEADER)),
+                headers=dict(message.headers() or []),
             )
         )
     return events
-
-
-def _header_int(value: bytes | None) -> int | None:
-    """A retry header we cannot read is treated as absent, so the event is
-    retried straight away rather than crashing the loop on every restart."""
-    try:
-        return int(value) if value is not None else None
-    except ValueError:
-        return None
 
 
 def _decode_key(key: bytes) -> str | None:
