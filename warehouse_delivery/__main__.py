@@ -50,8 +50,8 @@ def build_redis_client(config: Config) -> Any:
 
 
 def run_loops(loops: Sequence[Callable[[], None]], stop: threading.Event) -> None:
-    """Runs each loop on its own thread until they all return. If one raises,
-    the others are told to stop and the error is raised once they have."""
+    """If one loop raises, the others are told to stop, and its error is raised
+    once they have returned."""
     errors: list[BaseException] = []
 
     def run(loop: Callable[[], None]) -> None:
@@ -71,11 +71,9 @@ def run_loops(loops: Sequence[Callable[[], None]], stop: threading.Event) -> Non
 
 
 def main() -> None:
-    """Runs the delivery loop for the events topic and another for the retry
-    topic until the process is told to stop with SIGINT or SIGTERM. If either
-    fails for a reason on our side, such as Redis being down or a bug, the
-    error is logged and the process exits so ECS restarts it; Kafka then hands
-    back the messages that were never marked done."""
+    """If either loop fails for a reason on our side, such as Redis being down
+    or a bug, the process exits so ECS restarts it, and Kafka hands back the
+    messages that were never marked done."""
     configure_logging()
     config = Config.from_env()
     stop = threading.Event()

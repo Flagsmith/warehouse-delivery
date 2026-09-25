@@ -10,10 +10,8 @@ FAILED_AT_HEADER = "failed_at_ms"
 
 @dataclass(frozen=True)
 class Event:
-    """One experiment event as it arrived from Kafka: the message key, the
-    JSON payload and, for an event read from the retry topic, its retry
-    headers. Topic, partition, offset and timestamp are left behind because
-    nothing here reads them."""
+    """One experiment event as it arrived from Kafka. Topic, partition, offset
+    and timestamp are left behind because nothing here reads them."""
 
     key: str | None
     payload: bytes

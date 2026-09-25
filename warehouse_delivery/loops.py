@@ -35,8 +35,7 @@ def run_delivery_loop(
             continue
         wait = _due_at(events, retry_delay_seconds) - clock()
         if wait > 0 and stop.wait(wait):
-            # Told to stop while waiting: leave the batch uncommitted so it
-            # comes back after the restart.
+            # Uncommitted, so the batch comes back after the restart.
             return
         delivery_service.deliver_batch(events)
         consumer.commit(asynchronous=False)
