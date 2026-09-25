@@ -2,15 +2,23 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+# Headers the retry writer puts on every retry message: how many deliveries of
+# the event have failed so far, and when the last one did.
+ATTEMPTS_HEADER = "delivery_attempts"
+FAILED_AT_HEADER = "failed_at_ms"
+
 
 @dataclass(frozen=True)
 class Event:
-    """One experiment event as it arrived from Kafka: the message key and the
-    JSON payload. Topic, partition, offset, timestamp and headers are left
-    behind because nothing here reads them."""
+    """One experiment event as it arrived from Kafka: the message key, the
+    JSON payload and, for an event read from the retry topic, its retry
+    headers. Topic, partition, offset and timestamp are left behind because
+    nothing here reads them."""
 
     key: str | None
     payload: bytes
+    attempts: int = 0
+    failed_at_ms: int | None = None
 
     @property
     def environment_key(self) -> str | None:

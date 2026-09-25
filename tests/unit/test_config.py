@@ -27,6 +27,9 @@ def test_config_from_env__only_required_set__fills_defaults() -> None:
     assert config.events_topic == "external_warehouse_events"
     assert config.retry_topic == "external_warehouse_events_retry"
     assert config.consumer_group == "warehouse-delivery"
+    assert config.retry_consumer_group == "warehouse-delivery-retry"
+    assert config.retry_delay_seconds == 300
+    assert config.retry_max_attempts == 12
     assert config.batch_max_records == 5000
     assert config.batch_max_wait_seconds == 5.0
     assert config.redis_cluster is True
@@ -41,6 +44,9 @@ def test_config_from_env__overrides_set__parses_them() -> None:
         "EXTERNAL_WAREHOUSE_TOPIC": "topic",
         "EXTERNAL_WAREHOUSE_RETRY_TOPIC": "retry-topic",
         "KAFKA_CONSUMER_GROUP": "group",
+        "KAFKA_RETRY_CONSUMER_GROUP": "retry-group",
+        "RETRY_DELAY_MS": "60000",
+        "RETRY_MAX_ATTEMPTS": "3",
         "BATCH_MAX_RECORDS": "100",
         "BATCH_MAX_WAIT_MS": "250",
         "REDIS_CLUSTER": "false",
@@ -55,6 +61,9 @@ def test_config_from_env__overrides_set__parses_them() -> None:
     assert config.events_topic == "topic"
     assert config.retry_topic == "retry-topic"
     assert config.consumer_group == "group"
+    assert config.retry_consumer_group == "retry-group"
+    assert config.retry_delay_seconds == 60
+    assert config.retry_max_attempts == 3
     assert config.batch_max_records == 100
     assert config.batch_max_wait_seconds == 0.25
     assert config.delivery_concurrency == 4
@@ -110,6 +119,10 @@ def test_config_from_env__auth_none__needs_no_credentials() -> None:
         pytest.param("BATCH_MAX_RECORDS", "lots", id="integer"),
         pytest.param("REDIS_CLUSTER", "maybe", id="boolean"),
         pytest.param("DELIVERY_CONCURRENCY", "0", id="concurrency-zero"),
+        pytest.param("RETRY_MAX_ATTEMPTS", "0", id="max-attempts-zero"),
+        # Longer would outlast the consumer's poll interval while waiting
+        pytest.param("RETRY_DELAY_MS", "300001", id="retry-delay-too-long"),
+        pytest.param("RETRY_DELAY_MS", "-1", id="retry-delay-negative"),
     ],
 )
 def test_config_from_env__invalid_value__raises_naming_variable(

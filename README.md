@@ -1,6 +1,6 @@
 # Warehouse delivery
 
-Reads experiment events from the `external_warehouse_events` Kafka topic and inserts each customer's events into their own data warehouse. If a customer's warehouse rejects their events, the connection shows as errored in the dashboard and the events are written to the `external_warehouse_events_retry` topic. Nothing consumes the retry topic yet. Connection targets come from, and delivery status goes back to, the ingestion Redis the API maintains; this service never touches Postgres.
+Reads experiment events from the `external_warehouse_events` Kafka topic and inserts each customer's events into their own data warehouse. If a customer's warehouse rejects their events, the connection shows as errored in the dashboard and the events are written to the `external_warehouse_events_retry` topic. A second loop in the same process reads that topic and tries each event again once `RETRY_DELAY_MS` has passed since it failed, up to `RETRY_MAX_ATTEMPTS` times, after which it is dropped and logged. Connection targets come from, and delivery status goes back to, the ingestion Redis the API maintains; this service never touches Postgres.
 
 ## Local development
 
@@ -27,13 +27,16 @@ make run
 | `EXTERNAL_WAREHOUSE_TOPIC` | `external_warehouse_events` | Topic to deliver from |
 | `EXTERNAL_WAREHOUSE_RETRY_TOPIC` | `external_warehouse_events_retry` | Topic failed deliveries are written to |
 | `KAFKA_CONSUMER_GROUP` | `warehouse-delivery` | Consumer group |
+| `KAFKA_RETRY_CONSUMER_GROUP` | `warehouse-delivery-retry` | Consumer group for the retry topic |
+| `RETRY_DELAY_MS` | `300000` | How long after a failure an event is tried again; at most 300000 |
+| `RETRY_MAX_ATTEMPTS` | `12` | Retries per event before it is dropped |
 | `BATCH_MAX_RECORDS` | `5000` | Records per consumed batch |
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
 
 ## Kafka topics
 
-The service does not create topics. Before starting it, create the retry topic (`EXTERNAL_WAREHOUSE_RETRY_TOPIC`) with the same partition count as the events topic, and give the Kafka user write access to it. If the topic is missing, the first failed delivery stops the service without committing the batch.
+The service does not create topics. Before starting it, create the retry topic (`EXTERNAL_WAREHOUSE_RETRY_TOPIC`) with the same partition count as the events topic, and give the Kafka user read and write access to it and access to the `KAFKA_RETRY_CONSUMER_GROUP` consumer group. If the topic is missing, the first failed delivery stops the service without committing the batch.
 
 ## Running the image
 

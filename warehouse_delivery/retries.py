@@ -2,16 +2,13 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
+import structlog
 from confluent_kafka import KafkaError, KafkaException, Message
 
-from warehouse_delivery.events import Event
+from warehouse_delivery.events import ATTEMPTS_HEADER, FAILED_AT_HEADER, Event
 from warehouse_delivery.kafka import PRODUCE_TIMEOUT_MS
 
-# Headers on every retry message, for the retry consumer to decide when to try
-# again and when to give up. The key and value are exactly those of the
-# original message, so the same code can read either topic.
-ATTEMPTS_HEADER = "delivery_attempts"
-FAILED_AT_HEADER = "failed_at_ms"
+logger = structlog.get_logger("warehouse")
 
 # Longer than the producer's own delivery timeout, so flush only gives up once
 # the client has reported every message as delivered or failed.
@@ -34,25 +31,42 @@ class KafkaRetryWriter:
         producer: Any,
         topic: str,
         *,
+        max_attempts: int,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._producer = producer
         self._topic = topic
+        self._max_attempts = max_attempts
         self._clock = clock
         self._errors: list[KafkaError] = []
 
     def write(self, environment_key: str, events: Sequence[Event]) -> None:
-        headers = {
-            ATTEMPTS_HEADER: b"1",
-            FAILED_AT_HEADER: str(round(self._clock() * 1000)).encode(),
-        }
+        # The key and value are exactly those of the original message, so the
+        # same code reads either topic.
+        failed_at = str(round(self._clock() * 1000)).encode()
+        exhausted = 0
         for event in events:
+            # An event read with attempts == n has now failed n retries, on
+            # top of its first delivery from the main topic.
+            if event.attempts >= self._max_attempts:
+                exhausted += 1
+                continue
             self._producer.produce(
                 self._topic,
                 key=environment_key.encode(),
                 value=event.payload,
-                headers=headers,
+                headers={
+                    ATTEMPTS_HEADER: str(event.attempts + 1).encode(),
+                    FAILED_AT_HEADER: failed_at,
+                },
                 on_delivery=self._on_delivery,
+            )
+        if exhausted:
+            logger.error(
+                "delivery.dropped",
+                reason="retries_exhausted",
+                environment__key=environment_key,
+                events__count=exhausted,
             )
 
     def flush(self) -> None:

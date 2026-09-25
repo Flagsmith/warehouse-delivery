@@ -5,6 +5,11 @@ from typing import Literal
 
 KafkaAuthMode = Literal["scram", "none"]
 
+# The retry loop waits for a batch to fall due without polling Kafka, so the
+# delay plus the batch itself has to fit inside the consumer's ten-minute poll
+# interval (kafka.MAX_POLL_INTERVAL_MS).
+MAX_RETRY_DELAY_MS = 300_000
+
 
 class ConfigError(Exception):
     """Raised at startup, naming the environment variable that is missing or
@@ -23,6 +28,9 @@ class Config:
     events_topic: str = "external_warehouse_events"
     retry_topic: str = "external_warehouse_events_retry"
     consumer_group: str = "warehouse-delivery"
+    retry_consumer_group: str = "warehouse-delivery-retry"
+    retry_delay_seconds: float = 300.0
+    retry_max_attempts: int = 12
     batch_max_records: int = 5000
     batch_max_wait_seconds: float = 5.0
     delivery_concurrency: int = 16
@@ -58,6 +66,13 @@ class Config:
             events_topic=env.get("EXTERNAL_WAREHOUSE_TOPIC", cls.events_topic),
             retry_topic=env.get("EXTERNAL_WAREHOUSE_RETRY_TOPIC", cls.retry_topic),
             consumer_group=env.get("KAFKA_CONSUMER_GROUP", cls.consumer_group),
+            retry_consumer_group=env.get(
+                "KAFKA_RETRY_CONSUMER_GROUP", cls.retry_consumer_group
+            ),
+            retry_delay_seconds=_retry_delay_ms(env) / 1000,
+            retry_max_attempts=_positive_int(
+                env, "RETRY_MAX_ATTEMPTS", cls.retry_max_attempts
+            ),
             batch_max_records=_int(env, "BATCH_MAX_RECORDS", cls.batch_max_records),
             batch_max_wait_seconds=_int(env, "BATCH_MAX_WAIT_MS", 5000) / 1000,
             delivery_concurrency=_positive_int(
@@ -101,5 +116,15 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     if value < 1:
         raise ConfigError(
             f"Invalid value for {name}: {value} (expected a positive integer)"
+        )
+    return value
+
+
+def _retry_delay_ms(env: Mapping[str, str]) -> int:
+    value = _int(env, "RETRY_DELAY_MS", MAX_RETRY_DELAY_MS)
+    if not 0 <= value <= MAX_RETRY_DELAY_MS:
+        raise ConfigError(
+            f"Invalid value for RETRY_DELAY_MS: {value} "
+            f"(expected 0 to {MAX_RETRY_DELAY_MS})"
         )
     return value

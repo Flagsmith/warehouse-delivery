@@ -2,6 +2,7 @@ import logging
 import signal
 import sys
 import threading
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import structlog
@@ -48,11 +49,33 @@ def build_redis_client(config: Config) -> Any:
     )
 
 
+def run_loops(loops: Sequence[Callable[[], None]], stop: threading.Event) -> None:
+    """Runs each loop on its own thread until they all return. If one raises,
+    the others are told to stop and the error is raised once they have."""
+    errors: list[BaseException] = []
+
+    def run(loop: Callable[[], None]) -> None:
+        try:
+            loop()
+        except BaseException as exc:
+            errors.append(exc)
+            stop.set()
+
+    threads = [threading.Thread(target=run, args=(loop,)) for loop in loops]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise errors[0]
+
+
 def main() -> None:
-    """Runs the delivery loop until the process is told to stop with SIGINT or
-    SIGTERM. If the loop fails for a reason on our side, such as Redis being
-    down or a bug, the error is logged and the process exits so ECS restarts
-    it; Kafka then hands back the messages that were never marked done."""
+    """Runs the delivery loop for the events topic and another for the retry
+    topic until the process is told to stop with SIGINT or SIGTERM. If either
+    fails for a reason on our side, such as Redis being down or a bug, the
+    error is logged and the process exits so ECS restarts it; Kafka then hands
+    back the messages that were never marked done."""
     configure_logging()
     config = Config.from_env()
     stop = threading.Event()
@@ -60,38 +83,62 @@ def main() -> None:
         signal.signal(signum, lambda *_: stop.set())
 
     redis_client = build_redis_client(config)
-    delivery_service = DeliveryService(
-        connections=RedisWarehouseConnections(
-            redis_client, fernet_from_secret(config.warehouse_credentials_secret)
-        ),
-        status_writer=RedisConnectionStatusWriter(redis_client),
-        retry_writer=KafkaRetryWriter(
-            Producer(producer_settings(config)), config.retry_topic
-        ),
-        concurrency=config.delivery_concurrency,
+    connections = RedisWarehouseConnections(
+        redis_client, fernet_from_secret(config.warehouse_credentials_secret)
     )
-    consumer = Consumer(consumer_settings(config))
-    consumer.subscribe([config.events_topic])
+    status_writer = RedisConnectionStatusWriter(redis_client)
+
+    def consume(topic: str, group_id: str) -> Callable[[], None]:
+        # Each loop gets its own producer, so one loop's flush never waits on
+        # or reports the other loop's retry messages.
+        delivery_service = DeliveryService(
+            connections=connections,
+            status_writer=status_writer,
+            retry_writer=KafkaRetryWriter(
+                Producer(producer_settings(config)),
+                config.retry_topic,
+                max_attempts=config.retry_max_attempts,
+            ),
+            concurrency=config.delivery_concurrency,
+        )
+
+        def loop() -> None:
+            structlog.contextvars.bind_contextvars(consumer__topic=topic)
+            consumer = Consumer(consumer_settings(config, group_id=group_id))
+            consumer.subscribe([topic])
+            try:
+                run_delivery_loop(
+                    consumer,
+                    delivery_service,
+                    batch_max_records=config.batch_max_records,
+                    batch_max_wait_seconds=config.batch_max_wait_seconds,
+                    retry_delay_seconds=config.retry_delay_seconds,
+                    stop=stop,
+                )
+            except BaseException as exc:
+                logger.error("service.failed", exc_info=exc)
+                raise
+            finally:
+                consumer.close()
+
+        return loop
 
     logger.info(
         "service.started",
         events__topic=config.events_topic,
         retry__topic=config.retry_topic,
         consumer__group=config.consumer_group,
+        retry__consumer_group=config.retry_consumer_group,
     )
     try:
-        run_delivery_loop(
-            consumer,
-            delivery_service,
-            batch_max_records=config.batch_max_records,
-            batch_max_wait_seconds=config.batch_max_wait_seconds,
-            stop=stop,
+        run_loops(
+            [
+                consume(config.events_topic, config.consumer_group),
+                consume(config.retry_topic, config.retry_consumer_group),
+            ],
+            stop,
         )
-    except BaseException as exc:
-        logger.error("service.failed", exc_info=exc)
-        raise
     finally:
-        consumer.close()
         logger.info("service.stopped")
 
 
