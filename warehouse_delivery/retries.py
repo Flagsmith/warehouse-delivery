@@ -95,8 +95,7 @@ class KafkaRetryWriter:
                 dropped += 1
                 continue
             # The payload goes out unchanged, so the same code reads either
-            # topic. The key is always the environment, so an environment's
-            # retries stay in order on one partition.
+            # topic.
             self._producer.produce(
                 self._topic,
                 key=environment_key.encode(),
