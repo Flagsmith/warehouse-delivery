@@ -57,16 +57,14 @@ def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:
     assert stop.is_set()
 
 
-def test_run_loops__all_return__returns() -> None:
-    # Given loops that finish once stop is set, as after SIGTERM
-    stop = threading.Event()
-    stop.set()
+def test_run_loops__every_loop_finishes__each_ran_and_nothing_raised() -> None:
+    # Given
     finished: list[str] = []
 
     # When
     run_loops(
         [lambda: finished.append("events"), lambda: finished.append("retry")],
-        stop,
+        threading.Event(),
     )
 
     # Then
