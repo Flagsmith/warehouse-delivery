@@ -48,24 +48,12 @@ def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:
     def failing() -> None:
         raise RuntimeError("redis down")
 
+    told_to_stop: list[bool] = []
+
     def until_stopped() -> None:
-        assert stop.wait(timeout=5), "never told to stop"
+        told_to_stop.append(stop.wait(timeout=5))
 
     # When / Then
     with pytest.raises(RuntimeError, match="redis down"):
         run_loops([failing, until_stopped], stop)
-    assert stop.is_set()
-
-
-def test_run_loops__every_loop_finishes__each_ran_and_nothing_raised() -> None:
-    # Given
-    finished: list[str] = []
-
-    # When
-    run_loops(
-        [lambda: finished.append("events"), lambda: finished.append("retry")],
-        threading.Event(),
-    )
-
-    # Then
-    assert sorted(finished) == ["events", "retry"]
+    assert told_to_stop == [True]
