@@ -10,6 +10,8 @@ dependencies = [
     "redis>=5.2,<7",
     "cryptography>=43,<47",
     "structlog>=24.4,<26",
+    "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
 ]
 
 [project.optional-dependencies]
