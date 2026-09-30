@@ -20,7 +20,7 @@ SCRAM = Config(
 
 def test_consumer_settings__scram__authenticates_like_the_ingestion_server() -> None:
     # Given / When
-    settings = kafka.consumer_settings(SCRAM)
+    settings = kafka.consumer_settings(SCRAM, group_id="warehouse-delivery")
 
     # Then
     assert settings["bootstrap.servers"] == "b-1.example:9096"
@@ -46,11 +46,10 @@ def test_consumer_settings__auth_none__plaintext_without_credentials() -> None:
         kafka_password=None,
         redis_url="redis://localhost",
         warehouse_credentials_secret="secret",
-        consumer_group="local",
     )
 
     # When
-    settings = kafka.consumer_settings(config)
+    settings = kafka.consumer_settings(config, group_id="local")
 
     # Then
     assert settings["security.protocol"] == "PLAINTEXT"
@@ -61,7 +60,7 @@ def test_consumer_settings__auth_none__plaintext_without_credentials() -> None:
 def test_producer_settings__scram__authenticates_like_the_consumer() -> None:
     # Given / When
     producer = kafka.producer_settings(SCRAM)
-    consumer = kafka.consumer_settings(SCRAM)
+    consumer = kafka.consumer_settings(SCRAM, group_id="warehouse-delivery")
 
     # Then
     for name in (
@@ -89,11 +88,13 @@ def _message(
     key: bytes | None,
     value: bytes | None,
     error: Any = None,
+    headers: list[tuple[str, bytes]] | None = None,
 ) -> Any:
     message = mocker.Mock()
     message.error.return_value = error
     message.key.return_value = key
     message.value.return_value = value
+    message.headers.return_value = headers
     return message
 
 
@@ -167,3 +168,20 @@ def test_events_from_messages__no_value__payload_is_empty_bytes(
 
     # Then
     assert events == [Event(key="acme", payload=b"")]
+
+
+def test_events_from_messages__headers__kept_on_the_event(
+    mocker: MockerFixture,
+) -> None:
+    # Given a message from the retry topic
+    headers = [("retry_number", b"3"), ("failed_at_ms", b"1758000000123")]
+    messages = [_message(mocker, key=b"acme", value=b"{}", headers=headers)]
+
+    # When
+    events = kafka.events_from_messages(messages)
+
+    # Then
+    assert events[0].headers == {
+        "retry_number": b"3",
+        "failed_at_ms": b"1758000000123",
+    }

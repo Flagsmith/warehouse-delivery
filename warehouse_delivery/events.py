@@ -1,16 +1,16 @@
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class Event:
-    """One experiment event as it arrived from Kafka: the message key and the
-    JSON payload. Topic, partition, offset, timestamp and headers are left
-    behind because nothing here reads them."""
+    """One experiment event as it arrived from Kafka. Topic, partition, offset
+    and timestamp are left behind because nothing here reads them."""
 
     key: str | None
     payload: bytes
+    headers: dict[str, bytes | None] = field(default_factory=dict)
 
     @property
     def environment_key(self) -> str | None:

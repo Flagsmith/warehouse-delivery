@@ -13,7 +13,9 @@ CLIENT_ID = "warehouse-delivery"
 # so this has to cover the whole batch. With a 60 s insert timeout and about
 # 10 s to connect, ten minutes allows for roughly eight rounds of stalled
 # hosts, about 128 at the default concurrency, in the same batch; beyond that
-# the commit fails, the process exits and the batch is redelivered.
+# the commit fails, the process exits and the batch is redelivered. The retry
+# loop also spends up to RETRY_DELAY_MS of this waiting for a batch to fall
+# due, which leaves it about four rounds at the default delay.
 MAX_POLL_INTERVAL_MS = 600_000
 SESSION_TIMEOUT_MS = 45_000
 # Well inside the poll interval, so a broker that never acknowledges a retry
@@ -21,7 +23,7 @@ SESSION_TIMEOUT_MS = 45_000
 PRODUCE_TIMEOUT_MS = 30_000
 
 
-def consumer_settings(config: Config) -> dict[str, Any]:
+def consumer_settings(config: Config, *, group_id: str) -> dict[str, Any]:
     """Settings for the Kafka consumer. It connects to the same brokers with the
     same SASL/SCRAM login over TLS as the ingestion server.
 
@@ -30,7 +32,7 @@ def consumer_settings(config: Config) -> dict[str, Any]:
     that could mark messages done that were never inserted."""
     return {
         **_connection_settings(config),
-        "group.id": config.consumer_group,
+        "group.id": group_id,
         "enable.auto.commit": False,
         "auto.offset.reset": "earliest",
         "max.poll.interval.ms": MAX_POLL_INTERVAL_MS,
@@ -85,6 +87,7 @@ def events_from_messages(messages: Iterable[Message]) -> list[Event]:
             Event(
                 key=_decode_key(key) if isinstance(key, bytes) else key,
                 payload=message.value() or b"",
+                headers=dict(message.headers() or []),
             )
         )
     return events

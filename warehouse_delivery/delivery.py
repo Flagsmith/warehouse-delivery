@@ -2,6 +2,7 @@ import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 
 import structlog
 
@@ -81,6 +82,12 @@ class DeliveryService:
         with ThreadPoolExecutor(
             max_workers=min(self._concurrency, len(groups)),
             thread_name_prefix="delivery",
+            # Worker threads start with an empty logging context. Carry the
+            # caller's over, so their logs say which topic the batch came from.
+            initializer=partial(
+                structlog.contextvars.bind_contextvars,
+                **structlog.contextvars.get_contextvars(),
+            ),
         ) as executor:
             outcomes = list(
                 executor.map(self.deliver_for_environment, groups, groups.values())
