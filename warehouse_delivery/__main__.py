@@ -21,7 +21,6 @@ from warehouse_delivery.retries import KafkaRetryWriter
 logger = structlog.get_logger("warehouse")
 
 DATABASE_POOL_SIZE = 4
-DATABASE_STATEMENT_TIMEOUT = "2s"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 5.0
 
 
@@ -44,7 +43,6 @@ def configure_logging() -> None:
 def build_database_pool(config: Config) -> ConnectionPool:
     return ConnectionPool(
         config.database_url,
-        kwargs={"options": f"-c statement_timeout={DATABASE_STATEMENT_TIMEOUT}"},
         min_size=1,
         max_size=DATABASE_POOL_SIZE,
         timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
