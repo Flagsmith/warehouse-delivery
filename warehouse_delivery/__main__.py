@@ -4,16 +4,14 @@ import sys
 import threading
 from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Any
 
 import structlog
 from confluent_kafka import Consumer, Producer
-from redis import Redis
-from redis.cluster import RedisCluster
+from psycopg_pool import ConnectionPool
 
 from warehouse_delivery.config import Config
-from warehouse_delivery.connection_status import RedisConnectionStatusWriter
-from warehouse_delivery.connections import RedisWarehouseConnections
+from warehouse_delivery.connection_status import PostgresConnectionStatusWriter
+from warehouse_delivery.connections import PostgresWarehouseConnections
 from warehouse_delivery.crypto import fernet_from_secret
 from warehouse_delivery.delivery import DeliveryService
 from warehouse_delivery.kafka import consumer_settings, producer_settings
@@ -22,7 +20,9 @@ from warehouse_delivery.retries import KafkaRetryWriter
 
 logger = structlog.get_logger("warehouse")
 
-REDIS_SOCKET_TIMEOUT_SECONDS = 2.0
+DATABASE_POOL_SIZE = 4
+DATABASE_STATEMENT_TIMEOUT = "2s"
+DATABASE_CONNECT_TIMEOUT_SECONDS = 5.0
 
 
 def configure_logging() -> None:
@@ -41,12 +41,14 @@ def configure_logging() -> None:
     )
 
 
-def build_redis_client(config: Config) -> Any:
-    client_class = RedisCluster if config.redis_cluster else Redis
-    return client_class.from_url(
-        config.redis_url,
-        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
-        socket_keepalive=True,
+def build_database_pool(config: Config) -> ConnectionPool:
+    return ConnectionPool(
+        config.database_url,
+        kwargs={"options": f"-c statement_timeout={DATABASE_STATEMENT_TIMEOUT}"},
+        min_size=1,
+        max_size=DATABASE_POOL_SIZE,
+        timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
+        open=True,
     )
 
 
@@ -73,8 +75,8 @@ def run_loops(loops: Sequence[Callable[[], None]], stop: threading.Event) -> Non
 
 def build_delivery_service(
     config: Config,
-    connections: RedisWarehouseConnections,
-    status_writer: RedisConnectionStatusWriter,
+    connections: PostgresWarehouseConnections,
+    status_writer: PostgresConnectionStatusWriter,
 ) -> DeliveryService:
     return DeliveryService(
         connections=connections,
@@ -115,20 +117,20 @@ def run_consumer(
 
 
 def main() -> None:
-    """If either loop fails for a reason on our side, such as Redis being down
-    or a bug, the process exits so ECS restarts it, and Kafka hands back the
-    messages that were never marked done."""
+    """If either loop fails for a reason on our side, such as Postgres being
+    down or a bug, the process exits so ECS restarts it, and Kafka hands back
+    the messages that were never marked done."""
     configure_logging()
     config = Config.from_env()
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
 
-    redis_client = build_redis_client(config)
-    connections = RedisWarehouseConnections(
-        redis_client, fernet_from_secret(config.warehouse_credentials_secret)
+    database_pool = build_database_pool(config)
+    connections = PostgresWarehouseConnections(
+        database_pool, fernet_from_secret(config.warehouse_credentials_secret)
     )
-    status_writer = RedisConnectionStatusWriter(redis_client)
+    status_writer = PostgresConnectionStatusWriter(database_pool)
     # Each loop gets its own producer, so one loop's flush never waits on or
     # reports the other loop's retry messages.
     events_delivery = build_delivery_service(config, connections, status_writer)

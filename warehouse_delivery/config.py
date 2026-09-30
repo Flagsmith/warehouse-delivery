@@ -22,9 +22,8 @@ class Config:
     kafka_auth: KafkaAuthMode
     kafka_username: str | None
     kafka_password: str | None
-    redis_url: str
+    database_url: str
     warehouse_credentials_secret: str
-    redis_cluster: bool = True
     events_topic: str = "external_warehouse_events"
     retry_topic: str = "external_warehouse_events_retry"
     consumer_group: str = "warehouse-delivery"
@@ -60,9 +59,8 @@ class Config:
             kafka_auth=kafka_auth,
             kafka_username=kafka_username,
             kafka_password=kafka_password,
-            redis_url=_required(env, "REDIS_URL"),
+            database_url=_required(env, "DATABASE_URL"),
             warehouse_credentials_secret=_required(env, "WAREHOUSE_CREDENTIALS_SECRET"),
-            redis_cluster=_bool(env, "REDIS_CLUSTER", cls.redis_cluster),
             events_topic=env.get("EXTERNAL_WAREHOUSE_TOPIC", cls.events_topic),
             retry_topic=env.get("EXTERNAL_WAREHOUSE_RETRY_TOPIC", cls.retry_topic),
             consumer_group=env.get("KAFKA_CONSUMER_GROUP", cls.consumer_group),
@@ -87,17 +85,6 @@ def _required(env: Mapping[str, str], name: str) -> str:
     if not value:
         raise ConfigError(f"Missing required environment variable: {name}")
     return value
-
-
-def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
-    raw = env.get(name)
-    if raw is None:
-        return default
-    if raw.lower() in ("true", "1", "yes"):
-        return True
-    if raw.lower() in ("false", "0", "no"):
-        return False
-    raise ConfigError(f"Invalid value for {name}: {raw!r} (expected true or false)")
 
 
 def _int(env: Mapping[str, str], name: str, default: int) -> int:

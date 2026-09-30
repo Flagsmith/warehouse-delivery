@@ -9,8 +9,12 @@ from psycopg_pool import ConnectionPool
 
 
 @pytest.fixture()
-def database_pool() -> Iterator[ConnectionPool]:
-    database_url = os.environ["DATABASE_URL"]
+def database_url() -> str:
+    return os.environ["DATABASE_URL"]
+
+
+@pytest.fixture()
+def database_pool(database_url: str) -> Iterator[ConnectionPool]:
     schema = sql.Identifier(f"test_{uuid4().hex}")
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE SCHEMA {}").format(schema))

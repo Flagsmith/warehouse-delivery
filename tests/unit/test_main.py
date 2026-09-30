@@ -1,44 +1,30 @@
 import threading
 
 import pytest
-from pytest_mock import MockerFixture
 
-from warehouse_delivery.__main__ import build_redis_client, run_loops
+from warehouse_delivery.__main__ import build_database_pool, run_loops
 from warehouse_delivery.config import Config
 
 
-@pytest.mark.parametrize(
-    "cluster, patched",
-    [
-        pytest.param(True, "RedisCluster", id="elasticache-cluster"),
-        pytest.param(False, "Redis", id="single-node"),
-    ],
-)
-def test_build_redis_client__cluster_flag__picks_the_client_class(
-    cluster: bool,
-    patched: str,
-    mocker: MockerFixture,
+def test_build_database_pool__connection_from_pool__has_two_second_statement_timeout(
+    database_url: str,
 ) -> None:
     # Given
-    from_url = mocker.patch(f"warehouse_delivery.__main__.{patched}.from_url")
     config = Config(
         kafka_bootstrap_servers="b",
         kafka_auth="none",
         kafka_username=None,
         kafka_password=None,
-        redis_url="rediss://redis.example:6379",
+        database_url=database_url,
         warehouse_credentials_secret="s",
-        redis_cluster=cluster,
     )
 
     # When
-    client = build_redis_client(config)
+    with build_database_pool(config) as pool, pool.connection() as database:
+        statement_timeout = database.execute("SHOW statement_timeout").fetchone()
 
     # Then
-    assert client is from_url.return_value
-    from_url.assert_called_once_with(
-        "rediss://redis.example:6379", socket_timeout=2.0, socket_keepalive=True
-    )
+    assert statement_timeout == ("2s",)
 
 
 def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:
