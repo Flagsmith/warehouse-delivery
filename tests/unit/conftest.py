@@ -32,6 +32,16 @@ def database_pool() -> Iterator[ConnectionPool]:
             )
             """
         )
+        database.execute(
+            """
+            CREATE TABLE experimentation_warehousedeliverystatus (
+                connection_id integer PRIMARY KEY,
+                status text NOT NULL,
+                detail text,
+                recorded_at timestamptz NOT NULL
+            )
+            """
+        )
     yield pool
     pool.close()
     with psycopg.connect(database_url, autocommit=True) as admin:
