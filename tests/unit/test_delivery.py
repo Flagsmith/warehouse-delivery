@@ -357,12 +357,12 @@ def test_deliver_for_environment__adapter_cannot_be_built__marks_the_connection(
 def test_deliver_for_environment__status_write_fails__raises_as_our_own_failure(
     insert: Any,
 ) -> None:
-    # Given Redis is down when the outcome is written
-    status_writer = FakeStatusWriter(error=ConnectionError("redis down"))
+    # Given Postgres is down when the outcome is written
+    status_writer = FakeStatusWriter(error=ConnectionError("postgres down"))
     delivery = _delivery({"acme": ACME}, status_writer, insert)
 
     # When / Then the batch must not be committed as delivered
-    with pytest.raises(ConnectionError, match="redis down"):
+    with pytest.raises(ConnectionError, match="postgres down"):
         delivery.deliver_for_environment("acme", [_event("acme", "a1")])
 
 
@@ -370,7 +370,7 @@ def test_deliver_for_environment__our_own_failure__raises_and_nothing_committed(
     status_writer: FakeStatusWriter,
     insert: Any,
 ) -> None:
-    # Given a failure that is not the customer's: a bug, or Redis down
+    # Given a failure that is not the customer's: a bug, or Postgres down
     insert.side_effect = RuntimeError("boom")
     delivery = _delivery({"acme": ACME}, status_writer, insert)
 

@@ -32,7 +32,7 @@ def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:
     stop = threading.Event()
 
     def failing() -> None:
-        raise RuntimeError("redis down")
+        raise RuntimeError("postgres down")
 
     told_to_stop: list[bool] = []
 
@@ -40,6 +40,6 @@ def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:
         told_to_stop.append(stop.wait(timeout=5))
 
     # When / Then
-    with pytest.raises(RuntimeError, match="redis down"):
+    with pytest.raises(RuntimeError, match="postgres down"):
         run_loops([failing, until_stopped], stop)
     assert told_to_stop == [True]

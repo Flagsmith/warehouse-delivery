@@ -466,15 +466,6 @@ wheels = [
 ]
 
 [[package]]
-name = "redis"
-version = "6.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0d/d6/e8b92798a5bd67d659d51a18170e91c16ac3b59738d91894651ee255ed49/redis-6.4.0.tar.gz", hash = "sha256:b01bc7282b8444e28ec36b261df5375183bb47a07eb9c603f284e89cbc5ef010", size = 4647399, upload-time = "2025-08-07T08:10:11.441Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/02/89e2ed7e85db6c93dfa9e8f691c5087df4e3551ab39081a4d7c6d1f90e05/redis-6.4.0-py3-none-any.whl", hash = "sha256:f0544fa9604264e9464cdf4814e7d4830f74b165d52f2a330a760a88dd248b7f", size = 279847, upload-time = "2025-08-07T08:10:09.84Z" },
-]
-
-[[package]]
 name = "ruff"
 version = "0.14.14"
 source = { registry = "https://pypi.org/simple" }
@@ -564,7 +555,6 @@ dependencies = [
     { name = "cryptography" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
-    { name = "redis" },
     { name = "structlog" },
     { name = "urllib3" },
 ]
@@ -594,7 +584,6 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<8" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14,<4" },
     { name = "pytest-structlog", marker = "extra == 'dev'", specifier = ">=1.1,<2" },
-    { name = "redis", specifier = ">=5.2,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.7,<0.15" },
     { name = "structlog", specifier = ">=24.4,<26" },
     { name = "types-confluent-kafka", marker = "extra == 'dev'", specifier = ">=1.3,<2" },

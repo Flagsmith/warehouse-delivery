@@ -2,7 +2,7 @@ class DeliveryError(Exception):
     """A customer's events could not be inserted for a reason on the customer's
     side: their warehouse is unreachable, refused our login, has no events
     table, rejected the rows, or the connection details the API stored are
-    unusable. Failures on our side, such as Redis being down or a bug, are
+    unusable. Failures on our side, such as Postgres being down or a bug, are
     never wrapped in this.
 
     ``kind`` is a short label for the logs, such as ``authentication``.

@@ -7,7 +7,6 @@ dependencies = [
     "confluent-kafka>=2.6,<3",
     "clickhouse-connect>=1.6,<2",
     "urllib3>=2,<3",
-    "redis>=5.2,<7",
     "cryptography>=43,<47",
     "structlog>=24.4,<26",
     "psycopg[binary]>=3.2,<4",
@@ -49,7 +48,7 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-p", "no:warnings", "--import-mode=importlib"]
-markers = ["integration: needs Redpanda, ClickHouse or Redis running locally"]
+markers = ["integration: needs Redpanda, ClickHouse or Postgres running locally"]
 
 [tool.mypy]
 strict = true
