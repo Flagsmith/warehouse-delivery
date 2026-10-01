@@ -7,12 +7,12 @@ ERRORED = "errored"
 
 STATUS_UPSERT = """
 INSERT INTO experimentation_warehousedeliverystatus
-    (connection_id, status, detail, recorded_at)
+    (connection_id, status, detail, updated_at)
 VALUES (%s, %s, %s, now())
 ON CONFLICT (connection_id) DO UPDATE SET
     status = EXCLUDED.status,
     detail = EXCLUDED.detail,
-    recorded_at = EXCLUDED.recorded_at
+    updated_at = EXCLUDED.updated_at
 """
 
 

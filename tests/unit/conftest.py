@@ -42,7 +42,7 @@ def database_pool(database_url: str) -> Iterator[ConnectionPool]:
                 connection_id integer PRIMARY KEY,
                 status text NOT NULL,
                 detail text,
-                recorded_at timestamptz NOT NULL
+                updated_at timestamptz NOT NULL
             )
             """
         )
