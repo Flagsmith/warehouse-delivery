@@ -1,6 +1,6 @@
 # Warehouse delivery
 
-Reads experiment events from the `external_warehouse_events` Kafka topic and inserts each customer's events into their own data warehouse. If a customer's warehouse rejects their events, the connection shows as errored in the dashboard and the events are written to the `external_warehouse_events_retry` topic. A second loop in the same process reads that topic and tries each event again once `RETRY_DELAY_MS` has passed since it failed, up to `MAX_RETRIES` times, after which it is dropped and logged. Connection targets come from, and delivery status goes back to, the ingestion Redis the API maintains; this service never touches Postgres.
+Reads experiment events from the `external_warehouse_events` Kafka topic and inserts each customer's events into their own data warehouse. If a customer's warehouse rejects their events, the connection shows as errored in the dashboard and the events are written to the `external_warehouse_events_retry` topic. A second loop in the same process reads that topic and tries each event again once `RETRY_DELAY_MS` has passed since it failed, up to `MAX_RETRIES` times, after which it is dropped and logged. Connection targets come from the `experimentation_delivery_connections` db view in Flagsmith's Postgres, and each connection's delivery status is written to the `experimentation_warehousedeliverystatus` table there.
 
 ## Local development
 
@@ -14,6 +14,8 @@ make test
 make run
 ```
 
+`make test` needs a Postgres at `DATABASE_URL`; each database test works in its own throwaway schema.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -21,8 +23,7 @@ make run
 | `KAFKA_BOOTSTRAP_SERVERS` | required | Broker list, as for the ingestion server |
 | `KAFKA_AUTH` | `scram` | `scram` for MSK with SASL/SCRAM over TLS, `none` for local brokers |
 | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | required with `scram` | SCRAM credentials |
-| `REDIS_URL` | required | Ingestion Redis, as for the ingestion server |
-| `REDIS_CLUSTER` | `true` | `false` for a single-node Redis in local runs |
+| `DATABASE_URL` | required | Flagsmith's Postgres, for connections and delivery status |
 | `WAREHOUSE_CREDENTIALS_SECRET` | required | Same value as the API; derives the key that decrypts connection credentials |
 | `EXTERNAL_WAREHOUSE_TOPIC` | `external_warehouse_events` | Topic to deliver from |
 | `EXTERNAL_WAREHOUSE_RETRY_TOPIC` | `external_warehouse_events_retry` | Topic failed deliveries are written to |
@@ -44,14 +45,14 @@ The service does not create topics. Before starting it, create the retry topic (
 docker build -t warehouse-delivery .
 docker run --rm \
   -e KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092 -e KAFKA_AUTH=none \
-  -e REDIS_URL=redis://host.docker.internal:6379 -e REDIS_CLUSTER=false \
+  -e DATABASE_URL=postgresql://postgres:password@host.docker.internal:5432/flagsmith \
   -e WAREHOUSE_CREDENTIALS_SECRET=dev \
   warehouse-delivery
 ```
 
 ## Deployment
 
-Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` cluster, in staging and production. One Fargate task, no load balancer: it only connects out, to Kafka, the ingestion Redis, and customers' warehouses.
+Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` cluster, in staging and production. One Fargate task, no load balancer: it only connects out, to Kafka, Flagsmith's Postgres, and customers' warehouses.
 
 - **Deploys**: a push to `main` deploys staging; a `v*` tag deploys production.
 - **Infrastructure**: the ECR repository, log group, security group, execution role, Kafka user and credentials secret all come from `flagsmith/pulumi`. Change them there, not by hand. Only the ECS service itself is created by hand.

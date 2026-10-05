@@ -13,7 +13,7 @@ SCRAM = Config(
     kafka_auth="scram",
     kafka_username="delivery",
     kafka_password="hunter2",
-    redis_url="rediss://redis.example:6379",
+    database_url="postgresql://db.example:5432/flagsmith",
     warehouse_credentials_secret="secret",
 )
 
@@ -44,7 +44,7 @@ def test_consumer_settings__auth_none__plaintext_without_credentials() -> None:
         kafka_auth="none",
         kafka_username=None,
         kafka_password=None,
-        redis_url="redis://localhost",
+        database_url="postgresql://localhost/flagsmith",
         warehouse_credentials_secret="secret",
     )
 

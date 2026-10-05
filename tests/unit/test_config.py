@@ -6,7 +6,7 @@ REQUIRED = {
     "KAFKA_BOOTSTRAP_SERVERS": "b-1.example:9096,b-2.example:9096",
     "KAFKA_USERNAME": "delivery",
     "KAFKA_PASSWORD": "hunter2",
-    "REDIS_URL": "rediss://redis.example:6379",
+    "DATABASE_URL": "postgresql://delivery@db.example:5432/flagsmith",
     "WAREHOUSE_CREDENTIALS_SECRET": "fernet-secret",
 }
 
@@ -22,7 +22,7 @@ def test_config_from_env__only_required_set__fills_defaults() -> None:
     assert config.kafka_auth == "scram"
     assert config.kafka_username == "delivery"
     assert config.kafka_password == "hunter2"
-    assert config.redis_url == "rediss://redis.example:6379"
+    assert config.database_url == "postgresql://delivery@db.example:5432/flagsmith"
     assert config.warehouse_credentials_secret == "fernet-secret"
     assert config.events_topic == "external_warehouse_events"
     assert config.retry_topic == "external_warehouse_events_retry"
@@ -32,7 +32,6 @@ def test_config_from_env__only_required_set__fills_defaults() -> None:
     assert config.max_retries == 12
     assert config.batch_max_records == 5000
     assert config.batch_max_wait_seconds == 5.0
-    assert config.redis_cluster is True
     assert config.delivery_concurrency == 16
 
 
@@ -49,7 +48,6 @@ def test_config_from_env__overrides_set__parses_them() -> None:
         "MAX_RETRIES": "3",
         "BATCH_MAX_RECORDS": "100",
         "BATCH_MAX_WAIT_MS": "250",
-        "REDIS_CLUSTER": "false",
         "DELIVERY_CONCURRENCY": "4",
     }
 
@@ -57,7 +55,6 @@ def test_config_from_env__overrides_set__parses_them() -> None:
     config = Config.from_env(env)
 
     # Then
-    assert config.redis_cluster is False
     assert config.events_topic == "topic"
     assert config.retry_topic == "retry-topic"
     assert config.consumer_group == "group"
@@ -77,7 +74,7 @@ def test_config_from_env__overrides_set__parses_them() -> None:
         ),
         pytest.param("KAFKA_USERNAME", "KAFKA_USERNAME", id="scram-username"),
         pytest.param("KAFKA_PASSWORD", "KAFKA_PASSWORD", id="scram-password"),
-        pytest.param("REDIS_URL", "REDIS_URL", id="redis"),
+        pytest.param("DATABASE_URL", "DATABASE_URL", id="database"),
         pytest.param(
             "WAREHOUSE_CREDENTIALS_SECRET", "WAREHOUSE_CREDENTIALS_SECRET", id="secret"
         ),
@@ -117,7 +114,6 @@ def test_config_from_env__auth_none__needs_no_credentials() -> None:
     [
         pytest.param("KAFKA_AUTH", "iam", id="auth-mode"),
         pytest.param("BATCH_MAX_RECORDS", "lots", id="integer"),
-        pytest.param("REDIS_CLUSTER", "maybe", id="boolean"),
         pytest.param("DELIVERY_CONCURRENCY", "0", id="concurrency-zero"),
         pytest.param("MAX_RETRIES", "0", id="max-retries-zero"),
         # Longer would outlast the consumer's poll interval while waiting

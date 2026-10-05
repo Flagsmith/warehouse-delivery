@@ -1,25 +1,25 @@
-import json
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
+from psycopg_pool import ConnectionPool
 
 from warehouse_delivery.crypto import decrypt_json
+from warehouse_delivery.database import transaction
 from warehouse_delivery.errors import DeliveryError
 
-# The API's sync_environment_ingestion task writes one entry under this prefix
-# for every environment that has an external warehouse connection. The rest of
-# the key is the environment's client API key, the same value the ingestion
-# server puts on each Kafka message, so a message leads straight to its
-# connection.
-CONNECTION_KEY_PREFIX = "experimentation:environment_warehouses:"
 CACHE_TTL_SECONDS = 60.0
 
+CONNECTION_QUERY = """
+SELECT connection_id, warehouse_type, config, credentials
+FROM experimentation_delivery_connections
+WHERE client_api_key = %s
+"""
+
 # Label used when the problem is the stored connection itself rather than the
-# customer's warehouse: the Redis entry is malformed, the credentials will not
-# decrypt, or a detail such as the port is missing.
+# customer's warehouse: the credentials will not decrypt, or a detail such as
+# the port is missing.
 STORED_CONNECTION_FAILURE = "stored_connection"
 INCOMPLETE_DETAIL = "Stored connection details are incomplete."
 UNDECRYPTABLE_DETAIL = "Stored credentials cannot be decrypted."
@@ -39,30 +39,14 @@ class WarehouseConnections(Protocol):
         environment sends events to Flagsmith's own warehouse only."""
 
 
-class RedisWarehouseConnections:
-    """Looks up an environment's warehouse connection in Redis and remembers it
-    for a minute, so a batch does not ask Redis once per environment and a
-    connection the customer deletes stops being looked up within a minute.
-
-    Finding no connection is not remembered. The events are being dropped
-    meanwhile, and the API may be about to publish it, so it is worth asking
-    Redis again on the next batch rather than dropping another minute of
-    events."""
-
-    def __init__(
-        self,
-        client: Any,
-        fernet: Fernet,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._client = client
+class PostgresWarehouseConnections:
+    def __init__(self, pool: ConnectionPool, fernet: Fernet) -> None:
+        self._pool = pool
         self._fernet = fernet
-        self._clock = clock
-        self._cache: dict[str, tuple[float, WarehouseConnection | None]] = {}
+        self._cache: dict[str, tuple[float, WarehouseConnection]] = {}
 
     def get(self, environment_key: str) -> WarehouseConnection | None:
-        now = self._clock()
+        now = time.monotonic()
         cached = self._cache.get(environment_key)
         if cached is not None and cached[0] > now:
             return cached[1]
@@ -72,33 +56,14 @@ class RedisWarehouseConnections:
         return connection
 
     def _read(self, environment_key: str) -> WarehouseConnection | None:
-        raw = self._client.get(f"{CONNECTION_KEY_PREFIX}{environment_key}")
-        if raw is None:
+        with transaction(self._pool) as database:
+            row = database.execute(CONNECTION_QUERY, [environment_key]).fetchone()
+        if row is None:
             return None
-        try:
-            document = json.loads(raw)
-            connection_id = int(document["connection_id"])
-            warehouse_type = str(document["warehouse_type"])
-            config = document["config"]
-            encrypted = document.get("credentials")
-            if not isinstance(config, dict):
-                raise TypeError("config is not an object")
-            if encrypted is not None and not isinstance(encrypted, str):
-                raise TypeError("credentials is not a string")
-        except (ValueError, KeyError, TypeError) as exc:
-            # The API wrote something we cannot read, so the bug is on our
-            # side. Raising DeliveryError instead of crashing keeps the other
-            # customers in the batch moving. Without a readable connection id
-            # there is nothing to mark errored in the dashboard, so the log
-            # is the only trace.
-            raise DeliveryError(STORED_CONNECTION_FAILURE, INCOMPLETE_DETAIL) from exc
+        connection_id, warehouse_type, config, encrypted = row
         try:
             credentials = decrypt_json(self._fernet, encrypted) if encrypted else {}
         except (InvalidToken, ValueError) as exc:
-            # InvalidToken: the API encrypted these with a different
-            # WAREHOUSE_CREDENTIALS_SECRET than ours, or the value is not a
-            # Fernet token. ValueError: it decrypted, but not to JSON. The
-            # connection id is known here, so the dashboard can say so.
             raise DeliveryError(
                 STORED_CONNECTION_FAILURE,
                 UNDECRYPTABLE_DETAIL,
@@ -107,6 +72,6 @@ class RedisWarehouseConnections:
         return WarehouseConnection(
             id=connection_id,
             warehouse_type=warehouse_type,
-            config=config,
+            config=config or {},
             credentials=credentials if isinstance(credentials, dict) else {},
         )

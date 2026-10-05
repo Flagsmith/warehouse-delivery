@@ -1,27 +1,66 @@
-import json
-
+import pytest
+from psycopg.errors import QueryCanceled
+from psycopg_pool import ConnectionPool
 from pytest_mock import MockerFixture
+from pytest_structlog import StructuredLogCapture
 
-from warehouse_delivery.connection_status import RedisConnectionStatusWriter
+from warehouse_delivery.connection_status import PostgresConnectionStatusWriter
 
 
-def test_write__outcome__lands_in_the_hash_the_api_drains(
-    mocker: MockerFixture,
+@pytest.fixture()
+def warehouse_connection_id(database_pool: ConnectionPool) -> int:
+    with database_pool.connection() as database:
+        database.execute("INSERT INTO experimentation_warehouseconnection VALUES (42)")
+    return 42
+
+
+def test_postgres_status_writer_write__delivery_outcome__updates_connection_status(
+    database_pool: ConnectionPool,
+    warehouse_connection_id: int,
 ) -> None:
-    # Given
-    client = mocker.Mock()
-    writer = RedisConnectionStatusWriter(client, clock=lambda: 1_758_000_000.0)
+    # Given a connection whose last delivery failed
+    writer = PostgresConnectionStatusWriter(database_pool)
+    writer.write(warehouse_connection_id, "errored", "Authentication failed.")
 
     # When
-    writer.write(42, "errored", "Authentication failed.")
+    writer.write(warehouse_connection_id, "connected", None)
 
-    # Then the entry sits under the connection id, for the API to apply
-    client.hset.assert_called_once()
-    hash_key, field, value = client.hset.call_args.args
-    assert hash_key == "experimentation:warehouse_delivery_status"
-    assert field == "42"
-    assert json.loads(value) == {
-        "status": "errored",
-        "detail": "Authentication failed.",
-        "at": 1_758_000_000.0,
-    }
+    # Then
+    with database_pool.connection() as database:
+        rows = database.execute(
+            "SELECT connection_id, status, detail "
+            "FROM experimentation_warehousedeliverystatus"
+        ).fetchall()
+    assert rows == [(warehouse_connection_id, "connected", None)]
+
+
+def test_postgres_status_writer_write__connection_deleted__skips_and_logs(
+    database_pool: ConnectionPool,
+    log: StructuredLogCapture,
+) -> None:
+    # Given a connection deleted while the service still had it cached
+
+    # When
+    PostgresConnectionStatusWriter(database_pool).write(42, "connected", None)
+
+    # Then
+    assert log.has(
+        "delivery_status.connection_missing", level="warning", connection__id=42
+    )
+
+
+def test_postgres_status_writer_write__database_not_answering__times_out(
+    database_pool: ConnectionPool,
+    warehouse_connection_id: int,
+    mocker: MockerFixture,
+) -> None:
+    # Given another session holding the status table locked
+    mocker.patch("warehouse_delivery.database.STATEMENT_TIMEOUT", "100ms")
+    writer = PostgresConnectionStatusWriter(database_pool)
+
+    with database_pool.connection() as other, other.transaction():
+        other.execute("LOCK TABLE experimentation_warehousedeliverystatus")
+
+        # When / Then
+        with pytest.raises(QueryCanceled):
+            writer.write(warehouse_connection_id, "connected", None)
