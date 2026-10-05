@@ -7,7 +7,7 @@ from functools import partial
 
 import structlog
 from confluent_kafka import Consumer, Producer
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from warehouse_delivery.config import Config
 from warehouse_delivery.connection_status import PostgresConnectionStatusWriter
@@ -41,13 +41,19 @@ def configure_logging() -> None:
 
 
 def build_database_pool(config: Config) -> ConnectionPool:
-    return ConnectionPool(
+    pool = ConnectionPool(
         config.database_url,
         min_size=1,
         max_size=DATABASE_POOL_SIZE,
         timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
         open=True,
     )
+    try:
+        pool.wait(timeout=DATABASE_CONNECT_TIMEOUT_SECONDS)
+    except PoolTimeout:
+        pool.close()
+        raise
+    return pool
 
 
 def run_loops(loops: Sequence[Callable[[], None]], stop: threading.Event) -> None:
