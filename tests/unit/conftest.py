@@ -37,9 +37,13 @@ def database_pool(database_url: str) -> Iterator[ConnectionPool]:
             """
         )
         database.execute(
+            "CREATE TABLE experimentation_warehouseconnection (id integer PRIMARY KEY)"
+        )
+        database.execute(
             """
             CREATE TABLE experimentation_warehousedeliverystatus (
-                connection_id integer PRIMARY KEY,
+                connection_id integer PRIMARY KEY
+                    REFERENCES experimentation_warehouseconnection (id),
                 status text NOT NULL,
                 detail text,
                 updated_at timestamptz NOT NULL

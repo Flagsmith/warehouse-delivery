@@ -1,6 +1,10 @@
 from typing import Protocol
 
+import structlog
+from psycopg.errors import ForeignKeyViolation
 from psycopg_pool import ConnectionPool
+
+logger = structlog.get_logger("warehouse")
 
 CONNECTED = "connected"
 ERRORED = "errored"
@@ -27,5 +31,10 @@ class PostgresConnectionStatusWriter:
         self._pool = pool
 
     def write(self, connection_id: int, status: str, detail: str | None) -> None:
-        with self._pool.connection() as database:
-            database.execute(STATUS_UPSERT, [connection_id, status, detail])
+        try:
+            with self._pool.connection() as database:
+                database.execute(STATUS_UPSERT, [connection_id, status, detail])
+        except ForeignKeyViolation:
+            logger.warning(
+                "delivery_status.connection_missing", connection__id=connection_id
+            )
