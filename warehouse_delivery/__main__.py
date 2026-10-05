@@ -164,6 +164,7 @@ def main() -> None:
             stop,
         )
     finally:
+        database_pool.close()
         logger.info("service.stopped")
 
 
