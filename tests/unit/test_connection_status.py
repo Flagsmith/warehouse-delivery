@@ -1,5 +1,7 @@
 import pytest
+from psycopg.errors import QueryCanceled
 from psycopg_pool import ConnectionPool
+from pytest_mock import MockerFixture
 from pytest_structlog import StructuredLogCapture
 
 from warehouse_delivery.connection_status import PostgresConnectionStatusWriter
@@ -45,3 +47,20 @@ def test_postgres_status_writer_write__connection_deleted__skips_and_logs(
     assert log.has(
         "delivery_status.connection_missing", level="warning", connection__id=42
     )
+
+
+def test_postgres_status_writer_write__database_not_answering__times_out(
+    database_pool: ConnectionPool,
+    warehouse_connection_id: int,
+    mocker: MockerFixture,
+) -> None:
+    # Given another session holding the status table locked
+    mocker.patch("warehouse_delivery.database.STATEMENT_TIMEOUT", "100ms")
+    writer = PostgresConnectionStatusWriter(database_pool)
+
+    with database_pool.connection() as other, other.transaction():
+        other.execute("LOCK TABLE experimentation_warehousedeliverystatus")
+
+        # When / Then
+        with pytest.raises(QueryCanceled):
+            writer.write(warehouse_connection_id, "connected", None)

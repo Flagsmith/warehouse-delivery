@@ -2,8 +2,10 @@ import json
 
 import pytest
 from freezegun import freeze_time
+from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+from pytest_mock import MockerFixture
 
 from warehouse_delivery.connections import (
     PostgresWarehouseConnections,
@@ -180,3 +182,19 @@ def test_postgres_connections_get__credentials_not_json__raises_with_connection_
         store.get("client-env-key")
     assert excinfo.value.detail == "Stored credentials cannot be decrypted."
     assert excinfo.value.connection_id == 42
+
+
+def test_postgres_connections_get__database_not_answering__times_out(
+    database_pool: ConnectionPool,
+    mocker: MockerFixture,
+) -> None:
+    # Given another session holding the connections table locked
+    mocker.patch("warehouse_delivery.database.STATEMENT_TIMEOUT", "100ms")
+    store = PostgresWarehouseConnections(database_pool, FERNET)
+
+    with database_pool.connection() as other, other.transaction():
+        other.execute("LOCK TABLE experimentation_delivery_connections")
+
+        # When / Then
+        with pytest.raises(QueryCanceled):
+            store.get("client-env-key")

@@ -6,6 +6,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from psycopg_pool import ConnectionPool
 
 from warehouse_delivery.crypto import decrypt_json
+from warehouse_delivery.database import transaction
 from warehouse_delivery.errors import DeliveryError
 
 CACHE_TTL_SECONDS = 60.0
@@ -55,7 +56,7 @@ class PostgresWarehouseConnections:
         return connection
 
     def _read(self, environment_key: str) -> WarehouseConnection | None:
-        with self._pool.connection() as database:
+        with transaction(self._pool) as database:
             row = database.execute(CONNECTION_QUERY, [environment_key]).fetchone()
         if row is None:
             return None

@@ -4,6 +4,8 @@ import structlog
 from psycopg.errors import ForeignKeyViolation
 from psycopg_pool import ConnectionPool
 
+from warehouse_delivery.database import transaction
+
 logger = structlog.get_logger("warehouse")
 
 CONNECTED = "connected"
@@ -32,7 +34,7 @@ class PostgresConnectionStatusWriter:
 
     def write(self, connection_id: int, status: str, detail: str | None) -> None:
         try:
-            with self._pool.connection() as database:
+            with transaction(self._pool) as database:
                 database.execute(STATUS_UPSERT, [connection_id, status, detail])
         except ForeignKeyViolation:
             logger.warning(
