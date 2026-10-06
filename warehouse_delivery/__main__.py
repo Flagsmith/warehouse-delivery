@@ -4,6 +4,7 @@ import sys
 import threading
 from collections.abc import Callable, Sequence
 from functools import partial
+from pathlib import Path
 
 import structlog
 from confluent_kafka import Consumer, Producer
@@ -22,6 +23,10 @@ logger = structlog.get_logger("warehouse")
 
 DATABASE_POOL_SIZE = 4
 DATABASE_CONNECT_TIMEOUT_SECONDS = 5.0
+
+# Each loop touches its own file here on every pass; the Kubernetes liveness
+# probe restarts the container when any of them goes stale.
+HEARTBEAT_DIR = Path("/tmp")
 
 
 def configure_logging() -> None:
@@ -103,6 +108,7 @@ def run_consumer(
     group_id: str,
     delivery_service: DeliveryService,
     stop: threading.Event,
+    heartbeat_path: Path,
 ) -> None:
     structlog.contextvars.bind_contextvars(consumer__topic=topic)
     consumer = Consumer(consumer_settings(config, group_id=group_id))
@@ -115,6 +121,7 @@ def run_consumer(
             batch_max_wait_seconds=config.batch_max_wait_seconds,
             retry_delay_seconds=config.retry_delay_seconds,
             stop=stop,
+            heartbeat=heartbeat_path.touch,
         )
     except BaseException as exc:
         logger.error("service.failed", exc_info=exc)
@@ -160,6 +167,7 @@ def main() -> None:
                     config.consumer_group,
                     events_delivery,
                     stop,
+                    HEARTBEAT_DIR / "heartbeat-events",
                 ),
                 partial(
                     run_consumer,
@@ -168,6 +176,7 @@ def main() -> None:
                     config.retry_consumer_group,
                     retry_delivery,
                     stop,
+                    HEARTBEAT_DIR / "heartbeat-retry",
                 ),
             ],
             stop,

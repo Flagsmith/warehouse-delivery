@@ -69,6 +69,7 @@ def test_run_delivery_loop__batches__each_delivered_then_committed(
         batch_max_wait_seconds=2.5,
         retry_delay_seconds=300,
         stop=stop,
+        heartbeat=mocker.Mock(),
     )
 
     # Then each batch is polled for as configured, delivered and committed on
@@ -94,6 +95,7 @@ def test_run_delivery_loop__delivery_raises__no_commit(mocker: MockerFixture) ->
             batch_max_wait_seconds=2.5,
             retry_delay_seconds=300,
             stop=stop,
+            heartbeat=mocker.Mock(),
         )
     assert consumer.commits == 0
 
@@ -140,6 +142,7 @@ def test_run_delivery_loop__retry_batch_not_due__waits_for_the_latest_then_deliv
         batch_max_wait_seconds=2.5,
         retry_delay_seconds=300,
         stop=stop,
+        heartbeat=mocker.Mock(),
         clock=lambda: NOW,
     )
 
@@ -166,6 +169,7 @@ def test_run_delivery_loop__retry_batch_already_due__delivered_without_waiting(
         batch_max_wait_seconds=2.5,
         retry_delay_seconds=300,
         stop=stop,
+        heartbeat=mocker.Mock(),
         clock=lambda: NOW,
     )
 
@@ -191,6 +195,7 @@ def test_run_delivery_loop__stopped_while_waiting__batch_left_uncommitted(
         batch_max_wait_seconds=2.5,
         retry_delay_seconds=300,
         stop=stop,
+        heartbeat=mocker.Mock(),
         clock=lambda: NOW,
     )
 
@@ -216,8 +221,32 @@ def test_run_delivery_loop__failure_time_in_the_future__wait_capped_at_the_delay
         batch_max_wait_seconds=2.5,
         retry_delay_seconds=300,
         stop=stop,
+        heartbeat=mocker.Mock(),
         clock=lambda: NOW,
     )
 
     # Then the loop never waits long enough to be taken out of the group
     stop.wait.assert_called_once_with(300)
+
+
+def test_run_delivery_loop__empty_polls__heartbeat_each_pass(
+    mocker: MockerFixture,
+) -> None:
+    # Given an idle topic
+    stop = threading.Event()
+    consumer = FakeConsumer([[], []], stop)
+    heartbeat = mocker.Mock()
+
+    # When
+    loops.run_delivery_loop(
+        consumer,
+        mocker.Mock(),
+        batch_max_records=500,
+        batch_max_wait_seconds=2.5,
+        retry_delay_seconds=300,
+        stop=stop,
+        heartbeat=heartbeat,
+    )
+
+    # Then an idle loop still shows as alive
+    assert heartbeat.call_count == len(consumer.consume_args)
