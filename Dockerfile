@@ -24,6 +24,6 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
-USER app
+USER 10001:10001
 
 ENTRYPOINT ["warehouse-delivery"]
