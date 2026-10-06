@@ -249,4 +249,4 @@ def test_run_delivery_loop__empty_polls__heartbeat_each_pass(
     )
 
     # Then an idle loop still shows as alive
-    assert heartbeat.call_count == 3
+    assert heartbeat.call_count == len(consumer.consume_args)

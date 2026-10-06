@@ -50,58 +50,6 @@ docker run --rm \
   warehouse-delivery
 ```
 
-## Kubernetes
-
-The service serves no traffic, so it needs no readiness probe. It exits on its own failures, and Kubernetes restarts it. A liveness probe catches the remaining case: a loop that hangs without exiting. Each loop touches `/tmp/heartbeat-events` or `/tmp/heartbeat-retry` on every pass, including empty ones. A pass is built to finish within Kafka's ten-minute poll interval, so a file older than that means its loop is stuck.
-
-Don't probe Kafka or Postgres: an outage would restart every pod without fixing anything.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: warehouse-delivery
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: warehouse-delivery
-  template:
-    metadata:
-      labels:
-        app: warehouse-delivery
-    spec:
-      terminationGracePeriodSeconds: 60  # lets the current batch finish
-      containers:
-        - name: warehouse-delivery
-          image: flagsmith/warehouse-delivery:<version>
-          envFrom:
-            - secretRef:
-                name: warehouse-delivery
-          livenessProbe:
-            exec:
-              command:
-                - sh
-                - -c
-                - >-
-                  for f in /tmp/heartbeat-events /tmp/heartbeat-retry; do
-                  [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 600 ] || exit 1;
-                  done
-            initialDelaySeconds: 30
-            periodSeconds: 30
-            failureThreshold: 2
-          securityContext:
-            readOnlyRootFilesystem: true
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: tmp
-          emptyDir: {}
-```
-
-The `warehouse-delivery` secret holds the variables under [Configuration](#configuration). The `emptyDir` is only needed with `readOnlyRootFilesystem`.
-
 ## Deployment
 
 Runs as the `warehouse-delivery` ECS service in the `flagsmith-experimentation` cluster, in staging and production. One Fargate task, no load balancer: it only connects out, to Kafka, Flagsmith's Postgres, and customers' warehouses.
