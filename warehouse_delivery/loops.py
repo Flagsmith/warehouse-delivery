@@ -16,6 +16,7 @@ def run_delivery_loop(
     batch_max_wait_seconds: float,
     retry_delay_seconds: float,
     stop: threading.Event,
+    heartbeat: Callable[[], None],
     clock: Callable[[], float] = time.time,
 ) -> None:
     """Polls Kafka for a batch of messages, waits until the batch is due,
@@ -23,8 +24,12 @@ def run_delivery_loop(
 
     Kafka is only told after the whole batch is handled. If the process dies
     halfway through a batch, the same messages come back after a restart
-    instead of being lost."""
+    instead of being lost.
+
+    `heartbeat` is called once per pass, so a liveness probe can tell a hung
+    loop from one that is idle."""
     while not stop.is_set():
+        heartbeat()
         messages = consumer.consume(batch_max_records, timeout=batch_max_wait_seconds)
         events = events_from_messages(messages)
         if not events:
