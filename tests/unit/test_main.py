@@ -1,5 +1,6 @@
 import threading
 
+import psycopg
 import pytest
 from psycopg_pool import PoolTimeout
 from pytest_mock import MockerFixture
@@ -25,6 +26,33 @@ def test_build_database_pool__database_unreachable__raises(
     # When / Then
     with pytest.raises(PoolTimeout):
         build_database_pool(config)
+
+
+def test_build_database_pool__idle_connection_terminated__replaced(
+    database_url: str,
+) -> None:
+    # Given a pooled connection the server has since terminated
+    config = Config(
+        kafka_bootstrap_servers="localhost:9092",
+        kafka_auth="none",
+        kafka_username=None,
+        kafka_password=None,
+        database_url=database_url,
+        warehouse_credentials_secret="secret",
+    )
+    pool = build_database_pool(config)
+    with pool.connection() as database:
+        backend_pid = database.info.backend_pid
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute("SELECT pg_terminate_backend(%s)", (backend_pid,))
+
+    # When
+    with pool.connection() as database:
+        result = database.execute("SELECT 1").fetchone()
+
+    # Then
+    assert result == (1,)
+    pool.close()
 
 
 def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:

@@ -46,6 +46,9 @@ def build_database_pool(config: Config) -> ConnectionPool:
         min_size=1,
         max_size=DATABASE_POOL_SIZE,
         timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
+        # The server closes connections idle past its idle_session_timeout;
+        # without a check the pool hands them out dead.
+        check=ConnectionPool.check_connection,
         open=True,
     )
     try:
