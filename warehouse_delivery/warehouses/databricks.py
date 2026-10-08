@@ -75,6 +75,7 @@ MISSING_OR_DENIED_DETAIL = (
     "The events table is missing or the service principal lacks access to it. "
     "Run the setup SQL."
 )
+REJECTED_DETAIL = "The Databricks workspace rejected the request."
 TOKEN_REFRESH_MARGIN_SECONDS = 300
 
 # SDK exceptions carry only a message, so they are classified by these
@@ -107,6 +108,7 @@ _ERROR_MARKERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
         "authentication",
         "Authentication failed.",
     ),
+    (("Ingest payload too large",), "rejected", REJECTED_DETAIL),
     (
         (
             "Client specified an invalid argument",
@@ -193,7 +195,7 @@ class DatabricksWarehouse:
                 headers_provider=_TokenHeaders(self, token),
             )
             try:
-                stream.ingest_records_nowait(records)
+                stream.ingest_records_offset(records)
             finally:
                 # close() flushes, so it is the one wait for acknowledgements.
                 stream.close()
@@ -318,14 +320,20 @@ class _TokenHeaders(HeadersProvider):  # type: ignore[misc]  # the SDK ships no 
             _tokens.pop(_token_key(self._warehouse), None)
 
 
-_TokenKey = tuple[str, str, bytes, str]
+_TokenKey = tuple[str, str, str, bytes, str]
 _tokens: dict[_TokenKey, tuple[str, float]] = {}
 _tokens_lock = threading.Lock()
 
 
 def _token_key(warehouse: DatabricksWarehouse) -> _TokenKey:
     secret_digest = hashlib.sha256(warehouse.client_secret.encode()).digest()
-    return (warehouse.host, warehouse.client_id, secret_digest, warehouse.table_name)
+    return (
+        warehouse.host,
+        warehouse.workspace_id,
+        warehouse.client_id,
+        secret_digest,
+        warehouse.table_name,
+    )
 
 
 def _get_token(warehouse: DatabricksWarehouse) -> str:
@@ -422,7 +430,7 @@ def _oauth_error(body: str) -> str | None:
 
 
 def _rejected() -> DeliveryError:
-    return DeliveryError("rejected", "The Databricks workspace rejected the request.")
+    return DeliveryError("rejected", REJECTED_DETAIL)
 
 
 @lru_cache(maxsize=1)
