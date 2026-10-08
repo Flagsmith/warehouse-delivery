@@ -1,11 +1,15 @@
+import dataclasses
 import json
 import traceback
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import parse_qs
 
 import pytest
 from pytest_mock import MockerFixture
 from pytest_structlog import StructuredLogCapture
+from urllib3 import HTTPResponse, PoolManager
+from urllib3.exceptions import NewConnectionError
 from zerobus.sdk.shared import (
     NonRetriableException,
     RecordType,
@@ -37,6 +41,7 @@ WAREHOUSE = DatabricksWarehouse(
     client_id="sp-id",
     client_secret="sp-secret",
 )
+GET_POOL_MANAGER = databricks._get_pool_manager
 ROWS = [
     b'{"environment_key":"env","event":"$flag_exposure","identifier":"u1",'
     b'"timestamp":1753000000000}',
@@ -52,10 +57,23 @@ def _connection(config: dict[str, Any], credentials: dict[str, Any]) -> Any:
 
 
 @pytest.fixture(autouse=True)
-def clear_sdk_cache() -> Iterator[None]:
+def clear_caches() -> Iterator[None]:
     databricks._get_sdk.cache_clear()
+    databricks._tokens.clear()
     yield
     databricks._get_sdk.cache_clear()
+    databricks._tokens.clear()
+
+
+@pytest.fixture(autouse=True)
+def token_endpoint(mocker: MockerFixture) -> Any:
+    pool = mocker.patch(
+        "warehouse_delivery.warehouses.databricks._get_pool_manager"
+    ).return_value
+    pool.request.return_value = HTTPResponse(
+        body=b'{"access_token":"minted-token","expires_in":3600}', status=200
+    )
+    return pool
 
 
 @pytest.fixture()
@@ -344,7 +362,11 @@ def test_insert__rows__opens_a_stream_sends_every_record_and_closes_it(
     stream.flush.assert_not_called()
     kwargs = sdk_class.return_value.create_stream.call_args.kwargs
     assert kwargs["table_properties"].table_name == "main.flagsmith.events"
-    assert (kwargs["client_id"], kwargs["client_secret"]) == ("sp-id", "sp-secret")
+    assert "client_secret" not in kwargs
+    assert kwargs["headers_provider"].get_headers() == [
+        ("authorization", "Bearer minted-token"),
+        ("x-databricks-zerobus-table-name", "main.flagsmith.events"),
+    ]
     options = kwargs["options"]
     assert options.record_type == RecordType.JSON
     assert options.recovery is False
@@ -451,41 +473,12 @@ def test_insert__our_own_failure__propagates_and_still_closes_the_stream(
     [
         pytest.param(
             NonRetriableException(
-                "Specified UC token is in invalid format: Client error (403): "
-                '{"error":"access_denied","request_id":"c58174b0","error_description"'
-                ":\"Scopes 'all-apis' are not assigned to the client d9c616b1\"}."
-            ),
-            "authentication",
-            "The service principal secret must allow all APIs. "
-            "Generate a new secret with the All APIs scope.",
-            id="secret-without-all-apis",
-        ),
-        pytest.param(
-            NonRetriableException(
-                "Specified UC token is in invalid format: Client error (401): "
-                '{"error":"invalid_client","error_description":"Client '
-                'authentication failed"}.'
-            ),
-            "authentication",
-            "Authentication failed.",
-            id="bad-client-secret",
-        ),
-        pytest.param(
-            NonRetriableException(
                 "Failed to create stream: code: 'The request does not have valid "
                 'authentication credentials\', message: "Invalid token audience".'
             ),
             "authentication",
             "Authentication failed.",
             id="grpc-unauthenticated-wrong-workspace-id",
-        ),
-        pytest.param(
-            ZerobusException(
-                "Token fetch failed: Network error: error sending request for url"
-            ),
-            "unreachable",
-            "Could not connect to the host.",
-            id="token-endpoint-unreachable",
         ),
         pytest.param(
             ZerobusException("Failed to open a channel: transport error."),
@@ -533,18 +526,6 @@ def test_insert__our_own_failure__propagates_and_still_closes_the_stream(
             "Events table not found in the configured database. "
             "Run the setup SQL to create it.",
             id="grpc-not-found",
-        ),
-        pytest.param(
-            NonRetriableException(
-                "Specified UC token is in invalid format: Client error (401): "
-                '{"error":"invalid_authorization_details","request_id":"3e1d0593",'
-                '"error_description":"User is not authorized to the requested '
-                'authorizations"}.'
-            ),
-            "permission_denied",
-            "The events table is missing or the service principal lacks access "
-            "to it. Run the setup SQL.",
-            id="missing-object-or-grant-at-token-mint",
         ),
         pytest.param(
             NonRetriableException(
@@ -623,18 +604,19 @@ def test_insert__sdk_error__raises_delivery_error_with_dashboard_detail(
                 "Failed to create stream: code: 'The request does not have valid "
                 'authentication credentials\', message: "Invalid token".'
             ),
-            id="message-without-secret",
+            id="message-without-credentials",
         ),
         pytest.param(
-            NonRetriableException(
-                "Specified UC token is in invalid format: Client error (401): "
-                "client_secret=sp-secret rejected."
-            ),
+            NonRetriableException("Failed to create stream: secret sp-secret."),
             id="message-repeating-secret",
+        ),
+        pytest.param(
+            NonRetriableException("Failed to create stream: Bearer minted-token."),
+            id="message-repeating-token",
         ),
     ],
 )
-def test_insert__sdk_error__secret_never_reaches_the_error_or_the_logs(
+def test_insert__sdk_error__credentials_never_reach_the_error_or_the_logs(
     error: Exception,
     sdk_class: Any,
     log: StructuredLogCapture,
@@ -647,11 +629,244 @@ def test_insert__sdk_error__secret_never_reaches_the_error_or_the_logs(
         WAREHOUSE.insert([*ROWS, b"{not json"])
 
     # Then
-    logged = "".join(traceback.format_exception(excinfo.value))
+    logged = "".join(traceback.format_exception(excinfo.value)) + repr(log.events)
     assert "sp-secret" not in logged
-    assert "sp-secret" not in repr(excinfo.value)
-    assert "sp-secret" not in repr(log.events)
+    assert "minted-token" not in logged
     assert log.events
+
+
+def test_insert__token__minted_with_sql_scope_for_the_events_table(
+    token_endpoint: Any,
+    stream: Any,
+) -> None:
+    # Given / When
+    WAREHOUSE.insert(ROWS)
+
+    # Then
+    method, url = token_endpoint.request.call_args.args
+    assert (method, url) == (
+        "POST",
+        "https://dbc-a1b2c3d4-e5f6.cloud.databricks.com/oidc/v1/token",
+    )
+    kwargs = token_endpoint.request.call_args.kwargs
+    assert kwargs["redirect"] is False
+    assert kwargs["retries"] is False
+    assert kwargs["headers"]["authorization"] == "Basic c3AtaWQ6c3Atc2VjcmV0"
+    form = parse_qs(kwargs["body"])
+    assert form["grant_type"] == ["client_credentials"]
+    assert form["scope"] == ["sql"]
+    assert form["resource"] == [
+        "api://databricks/workspaces/1234567890123456/zerobusDirectWriteApi"
+    ]
+    assert json.loads(form["authorization_details"][0]) == [
+        {
+            "type": "unity_catalog_privileges",
+            "privileges": ["USE CATALOG"],
+            "object_type": "CATALOG",
+            "object_full_path": "main",
+        },
+        {
+            "type": "unity_catalog_privileges",
+            "privileges": ["USE SCHEMA"],
+            "object_type": "SCHEMA",
+            "object_full_path": "main.flagsmith",
+        },
+        {
+            "type": "unity_catalog_privileges",
+            "privileges": ["SELECT", "MODIFY"],
+            "object_type": "TABLE",
+            "object_full_path": "main.flagsmith.events",
+            "operations": ["zerobuswrite"],
+        },
+    ]
+
+
+def test_insert__token_still_fresh__reused(token_endpoint: Any, stream: Any) -> None:
+    # Given / When
+    WAREHOUSE.insert(ROWS)
+    WAREHOUSE.insert(ROWS)
+
+    # Then
+    token_endpoint.request.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        pytest.param(
+            dataclasses.replace(WAREHOUSE, client_secret="rotated"),
+            id="rotated-secret",
+        ),
+        pytest.param(dataclasses.replace(WAREHOUSE, schema="other"), id="other-table"),
+    ],
+)
+def test_insert__different_credentials_or_table__mints_another_token(
+    second: DatabricksWarehouse,
+    token_endpoint: Any,
+    stream: Any,
+) -> None:
+    # Given / When
+    WAREHOUSE.insert(ROWS)
+    second.insert(ROWS)
+
+    # Then
+    assert token_endpoint.request.call_count == 2
+
+
+def test_insert__token_near_expiry__mints_a_new_one(
+    token_endpoint: Any,
+    stream: Any,
+) -> None:
+    # Given a token that expires inside the refresh margin
+    token_endpoint.request.return_value = HTTPResponse(
+        body=b'{"access_token":"minted-token","expires_in":300}', status=200
+    )
+
+    # When
+    WAREHOUSE.insert(ROWS)
+    WAREHOUSE.insert(ROWS)
+
+    # Then
+    assert token_endpoint.request.call_count == 2
+
+
+def test_token_headers__invalidated__next_insert_mints_again(
+    token_endpoint: Any,
+    sdk_class: Any,
+    stream: Any,
+) -> None:
+    # Given
+    WAREHOUSE.insert(ROWS)
+    headers = sdk_class.return_value.create_stream.call_args.kwargs["headers_provider"]
+
+    # When
+    headers.invalidate()
+    WAREHOUSE.insert(ROWS)
+
+    # Then
+    assert token_endpoint.request.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "response, kind, detail",
+    [
+        pytest.param(
+            HTTPResponse(
+                body=b'{"error":"access_denied","error_description":"Scopes '
+                b"'sql' are not assigned to the client d9c616b1\"}",
+                status=403,
+            ),
+            "authentication",
+            "The service principal secret must allow the sql scope. "
+            "Generate a new secret with the sql scope.",
+            id="secret-without-sql-scope",
+        ),
+        pytest.param(
+            HTTPResponse(
+                body=b'{"error":"invalid_authorization_details","error_description"'
+                b':"User is not authorized to the requested authorizations"}',
+                status=401,
+            ),
+            "permission_denied",
+            "The events table is missing or the service principal lacks access "
+            "to it. Run the setup SQL.",
+            id="missing-object-or-grant",
+        ),
+        pytest.param(
+            HTTPResponse(
+                body=b'{"error":"invalid_client","error_description":"Client '
+                b'authentication failed"}',
+                status=401,
+            ),
+            "authentication",
+            "Authentication failed.",
+            id="bad-client-secret",
+        ),
+        pytest.param(
+            HTTPResponse(body=b"upstream error", status=503),
+            "rejected",
+            "The Databricks workspace rejected the request.",
+            id="server-error",
+        ),
+        pytest.param(
+            HTTPResponse(body=b"<html>not json</html>", status=200),
+            "rejected",
+            "The Databricks workspace rejected the request.",
+            id="unexpected-success-body",
+        ),
+        pytest.param(
+            NewConnectionError(None, "dns error"),  # type: ignore[arg-type]
+            "unreachable",
+            "Could not connect to the host.",
+            id="unreachable",
+        ),
+    ],
+)
+def test_insert__token_endpoint_refuses__raises_without_opening_a_stream(
+    response: HTTPResponse | Exception,
+    kind: str,
+    detail: str,
+    token_endpoint: Any,
+    sdk_class: Any,
+) -> None:
+    # Given
+    if isinstance(response, Exception):
+        token_endpoint.request.side_effect = response
+    else:
+        token_endpoint.request.return_value = response
+
+    # When / Then
+    with pytest.raises(DeliveryError) as excinfo:
+        WAREHOUSE.insert(ROWS)
+    assert (excinfo.value.kind, excinfo.value.detail) == (kind, detail)
+    assert "sp-secret" not in "".join(traceback.format_exception(excinfo.value))
+    sdk_class.return_value.create_stream.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "body, oauth_error",
+    [
+        pytest.param(
+            b'{"error":"invalid_client","error_description":"sp-id is unknown"}',
+            "invalid_client",
+            id="oauth-error",
+        ),
+        pytest.param(b"<html>gateway</html>", None, id="not-json"),
+        pytest.param(b'{"error":{"code":1}}', None, id="error-not-text"),
+    ],
+)
+def test_insert__token_endpoint_refuses__logs_status_and_oauth_error_only(
+    body: bytes,
+    oauth_error: str | None,
+    token_endpoint: Any,
+    log: StructuredLogCapture,
+) -> None:
+    # Given
+    token_endpoint.request.return_value = HTTPResponse(body=body, status=401)
+
+    # When
+    with pytest.raises(DeliveryError):
+        WAREHOUSE.insert(ROWS)
+
+    # Then
+    assert log.events == [
+        {
+            "level": "warning",
+            "event": "token.refused",
+            "connection__id": 7,
+            "http__status": 401,
+            "oauth__error": oauth_error,
+        }
+    ]
+
+
+def test_get_pool_manager__called_twice__returns_one_pool() -> None:
+    # Given / When
+    first, second = GET_POOL_MANAGER(), GET_POOL_MANAGER()
+
+    # Then
+    assert isinstance(first, PoolManager)
+    assert first is second
 
 
 def test_stream_options__worst_case__fits_inside_the_insert_timeout() -> None:
@@ -660,7 +875,8 @@ def test_stream_options__worst_case__fits_inside_the_insert_timeout() -> None:
 
     # When
     worst_case_ms = (
-        options.recovery_timeout_ms
+        databricks.MINT_TIMEOUT_SECONDS * 1000
+        + options.recovery_timeout_ms
         + max(options.flush_timeout_ms, options.server_lack_of_ack_timeout_ms)
         + databricks.PAUSED_CLOSE_TIMEOUT_MS
         + databricks.SDK_SHUTDOWN_MS
