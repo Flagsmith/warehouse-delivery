@@ -1,13 +1,21 @@
+import hashlib
 import json
 import math
 import re
+import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
+from urllib.parse import urlencode
 
 import structlog
+from urllib3 import PoolManager, Timeout
+from urllib3.exceptions import HTTPError
+from urllib3.util import make_headers
 from zerobus.sdk.shared import (
+    HeadersProvider,
     RecordType,
     StreamConfigurationOptions,
     TableProperties,
@@ -35,8 +43,9 @@ _REGION = re.compile(r"[a-z0-9-]+")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_]+")
 
 # Their sum must stay under clickhouse.INSERT_TIMEOUT_SECONDS.
+MINT_TIMEOUT_SECONDS = 10
 CREATE_TIMEOUT_MS = 15_000
-FLUSH_TIMEOUT_MS = 25_000
+FLUSH_TIMEOUT_MS = 20_000
 PAUSED_CLOSE_TIMEOUT_MS = 5_000
 SDK_SHUTDOWN_MS = 1_100
 
@@ -58,21 +67,19 @@ SCHEMA_MISMATCH_DETAIL = (
     "The warehouse rejected the events. Check that the events table "
     "matches the expected schema."
 )
-ALL_APIS_DETAIL = (
-    "The service principal secret must allow all APIs. "
-    "Generate a new secret with the All APIs scope."
+SQL_SCOPE_DETAIL = (
+    "The service principal secret must allow the sql scope. "
+    "Generate a new secret with the sql scope."
 )
+MISSING_OR_DENIED_DETAIL = (
+    "The events table is missing or the service principal lacks access to it. "
+    "Run the setup SQL."
+)
+TOKEN_REFRESH_MARGIN_SECONDS = 300
 
 # SDK exceptions carry only a message, so they are classified by these
 # markers, first match wins.
 _ERROR_MARKERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
-    (("are not assigned to the client",), "authentication", ALL_APIS_DETAIL),
-    (
-        ("invalid_authorization_details",),
-        "permission_denied",
-        "The events table is missing or the service principal lacks access to "
-        "it. Run the setup SQL.",
-    ),
     (
         ("The caller does not have permission",),
         "permission_denied",
@@ -86,7 +93,6 @@ _ERROR_MARKERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     ),
     (
         (
-            "Token fetch failed: Network error",
             "Failed to open a channel",
             "Failed to establish TLS connection",
             "Connection timeout",
@@ -97,10 +103,7 @@ _ERROR_MARKERS: tuple[tuple[tuple[str, ...], str, str], ...] = (
         "Could not connect to the host.",
     ),
     (
-        (
-            "Specified UC token is in invalid format",
-            "The request does not have valid authentication credentials",
-        ),
+        ("The request does not have valid authentication credentials",),
         "authentication",
         "Authentication failed.",
     ),
@@ -181,13 +184,13 @@ class DatabricksWarehouse:
             )
         if not records:
             return 0
+        token = _get_token(self)
         sdk = _get_sdk(self.server_endpoint, self.unity_catalog_url)
         try:
             stream = sdk.create_stream(
-                client_id=self.client_id,
-                client_secret=self.client_secret,
                 table_properties=TableProperties(self.table_name),
                 options=_stream_options(),
+                headers_provider=_TokenHeaders(self, token),
             )
             try:
                 stream.ingest_records_nowait(records)
@@ -195,8 +198,9 @@ class DatabricksWarehouse:
                 # close() flushes, so it is the one wait for acknowledgements.
                 stream.close()
         except ZerobusException as error:
-            cause = None if self.client_secret in str(error) else error
-            raise _delivery_error(error) from cause
+            message = str(error)
+            leaks = self.client_secret in message or token in message
+            raise _delivery_error(error) from (None if leaks else error)
         return len(records)
 
     def _is_valid(self) -> bool:
@@ -284,12 +288,143 @@ def _delivery_error(error: ZerobusException) -> DeliveryError:
     for markers, kind, detail in _ERROR_MARKERS:
         if any(marker in message for marker in markers):
             return DeliveryError(kind, detail)
-    return DeliveryError("rejected", "The Databricks workspace rejected the request.")
+    return _rejected()
 
 
 @lru_cache(maxsize=64)
 def _get_sdk(server_endpoint: str, unity_catalog_url: str) -> ZerobusSdk:
-    # Each SDK owns an async runtime; its token cache is keyed by credentials.
+    # Each SDK owns an async runtime, so one is shared per workspace.
     return ZerobusSdk(
         server_endpoint, unity_catalog_url, application_name=APPLICATION_NAME
     )
+
+
+# The SDK's own OAuth asks for scope=all-apis; we mint a sql-scoped token so
+# customers can keep their secret scoped to sql.
+class _TokenHeaders(HeadersProvider):  # type: ignore[misc]  # the SDK ships no types
+    def __init__(self, warehouse: DatabricksWarehouse, token: str) -> None:
+        super().__init__()
+        self._warehouse = warehouse
+        self._headers = [
+            ("authorization", f"Bearer {token}"),
+            ("x-databricks-zerobus-table-name", warehouse.table_name),
+        ]
+
+    def get_headers(self) -> list[tuple[str, str]]:
+        return self._headers
+
+    def invalidate(self) -> None:
+        with _tokens_lock:
+            _tokens.pop(_token_key(self._warehouse), None)
+
+
+_TokenKey = tuple[str, str, bytes, str]
+_tokens: dict[_TokenKey, tuple[str, float]] = {}
+_tokens_lock = threading.Lock()
+
+
+def _token_key(warehouse: DatabricksWarehouse) -> _TokenKey:
+    secret_digest = hashlib.sha256(warehouse.client_secret.encode()).digest()
+    return (warehouse.host, warehouse.client_id, secret_digest, warehouse.table_name)
+
+
+def _get_token(warehouse: DatabricksWarehouse) -> str:
+    key = _token_key(warehouse)
+    now = time.monotonic()
+    with _tokens_lock:
+        cached = _tokens.get(key)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    token, expires_in = _mint_token(warehouse)
+    with _tokens_lock:
+        for stale in [k for k, (_, expiry) in _tokens.items() if expiry <= now]:
+            del _tokens[stale]
+        _tokens[key] = (token, now + expires_in - TOKEN_REFRESH_MARGIN_SECONDS)
+    return token
+
+
+def _mint_token(warehouse: DatabricksWarehouse) -> tuple[str, float]:
+    catalog, schema = warehouse.catalog, warehouse.schema
+    authorization_details = [
+        {
+            "type": "unity_catalog_privileges",
+            "privileges": ["USE CATALOG"],
+            "object_type": "CATALOG",
+            "object_full_path": catalog,
+        },
+        {
+            "type": "unity_catalog_privileges",
+            "privileges": ["USE SCHEMA"],
+            "object_type": "SCHEMA",
+            "object_full_path": f"{catalog}.{schema}",
+        },
+        {
+            "type": "unity_catalog_privileges",
+            "privileges": ["SELECT", "MODIFY"],
+            "object_type": "TABLE",
+            "object_full_path": warehouse.table_name,
+            "operations": ["zerobuswrite"],
+        },
+    ]
+    body = urlencode(
+        {
+            "grant_type": "client_credentials",
+            "scope": "sql",
+            "resource": f"api://databricks/workspaces/{warehouse.workspace_id}"
+            "/zerobusDirectWriteApi",
+            "authorization_details": json.dumps(authorization_details),
+        }
+    )
+    headers = make_headers(
+        basic_auth=f"{warehouse.client_id}:{warehouse.client_secret}"
+    )
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    try:
+        response = _get_pool_manager().request(
+            "POST",
+            f"{warehouse.unity_catalog_url}/oidc/v1/token",
+            body=body,
+            headers=headers,
+            timeout=Timeout(total=MINT_TIMEOUT_SECONDS),
+            retries=False,
+            redirect=False,
+        )
+    except HTTPError as exc:
+        raise DeliveryError("unreachable", "Could not connect to the host.") from exc
+    if response.status == 200:
+        try:
+            payload = response.json()
+            return str(payload["access_token"]), float(payload["expires_in"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise _rejected() from exc
+    error = response.data.decode(errors="replace")
+    logger.warning(
+        "token.refused",
+        connection__id=warehouse.connection_id,
+        http__status=response.status,
+        oauth__error=_oauth_error(error),
+    )
+    if "are not assigned to the client" in error:
+        raise DeliveryError("authentication", SQL_SCOPE_DETAIL)
+    if "invalid_authorization_details" in error:
+        raise DeliveryError("permission_denied", MISSING_OR_DENIED_DETAIL)
+    if response.status < 500:
+        raise DeliveryError("authentication", "Authentication failed.")
+    raise _rejected()
+
+
+def _oauth_error(body: str) -> str | None:
+    try:
+        error = json.loads(body).get("error")
+    except (ValueError, AttributeError):
+        return None
+    return error if isinstance(error, str) else None
+
+
+def _rejected() -> DeliveryError:
+    return DeliveryError("rejected", "The Databricks workspace rejected the request.")
+
+
+@lru_cache(maxsize=1)
+def _get_pool_manager() -> PoolManager:
+    return PoolManager()
