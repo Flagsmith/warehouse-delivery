@@ -341,7 +341,7 @@ def test_insert__rows__opens_a_stream_sends_every_record_and_closes_it(
     # Given
     calls = mocker.Mock()
     calls.attach_mock(sdk_class.return_value.create_stream, "create_stream")
-    calls.attach_mock(stream.ingest_records_nowait, "ingest_records_nowait")
+    calls.attach_mock(stream.ingest_records_offset, "ingest_records_offset")
     calls.attach_mock(stream.close, "close")
 
     # When
@@ -356,7 +356,7 @@ def test_insert__rows__opens_a_stream_sends_every_record_and_closes_it(
     )
     assert [call[0] for call in calls.mock_calls] == [
         "create_stream",
-        "ingest_records_nowait",
+        "ingest_records_offset",
         "close",
     ]
     stream.flush.assert_not_called()
@@ -370,7 +370,7 @@ def test_insert__rows__opens_a_stream_sends_every_record_and_closes_it(
     options = kwargs["options"]
     assert options.record_type == RecordType.JSON
     assert options.recovery is False
-    (records,) = stream.ingest_records_nowait.call_args.args
+    (records,) = stream.ingest_records_offset.call_args.args
     assert [json.loads(record) for record in records] == [
         {
             "environment_key": "env",
@@ -400,7 +400,7 @@ def test_insert__unusable_rows__skips_and_logs_them_without_contents(
 
     # Then
     assert written == 2
-    assert len(stream.ingest_records_nowait.call_args.args[0]) == 2
+    assert len(stream.ingest_records_offset.call_args.args[0]) == 2
     assert log.events == [
         {
             "level": "warning",
@@ -433,7 +433,7 @@ def test_insert__same_workspace__reuses_one_sdk(sdk_class: Any, stream: Any) -> 
 def test_insert__ingest_fails__closes_the_stream_and_raises(stream: Any) -> None:
     # Given
     error = NonRetriableException("Stream is closed: code: 'Internal error'")
-    stream.ingest_records_nowait.side_effect = error
+    stream.ingest_records_offset.side_effect = error
 
     # When / Then
     with pytest.raises(DeliveryError) as excinfo:
@@ -460,7 +460,7 @@ def test_insert__our_own_failure__propagates_and_still_closes_the_stream(
     stream: Any,
 ) -> None:
     # Given
-    stream.ingest_records_nowait.side_effect = RuntimeError("boom")
+    stream.ingest_records_offset.side_effect = RuntimeError("boom")
 
     # When / Then
     with pytest.raises(RuntimeError, match="boom"):
@@ -577,6 +577,15 @@ def test_insert__our_own_failure__propagates_and_still_closes_the_stream(
             "rejected",
             "The Databricks workspace rejected the request.",
             id="other",
+        ),
+        pytest.param(
+            NonRetriableException(
+                "Invalid argument: Ingest payload too large: 10485761 bytes exceeds "
+                "the configured limit of 10420224 bytes."
+            ),
+            "rejected",
+            "The Databricks workspace rejected the request.",
+            id="payload-too-large",
         ),
     ],
 )
@@ -698,6 +707,10 @@ def test_insert__token_still_fresh__reused(token_endpoint: Any, stream: Any) -> 
             id="rotated-secret",
         ),
         pytest.param(dataclasses.replace(WAREHOUSE, schema="other"), id="other-table"),
+        pytest.param(
+            dataclasses.replace(WAREHOUSE, workspace_id="6543210987654321"),
+            id="corrected-workspace-id",
+        ),
     ],
 )
 def test_insert__different_credentials_or_table__mints_another_token(
