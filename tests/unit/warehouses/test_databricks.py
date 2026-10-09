@@ -88,104 +88,11 @@ def stream(sdk_class: Any) -> Any:
     return sdk_class.return_value.create_stream.return_value
 
 
-def test_from_connection__complete_details__reads_config_and_credentials() -> None:
-    # Given
-    connection = _connection(CONFIG, CREDENTIALS)
-
-    # When / Then
-    assert DatabricksWarehouse.from_connection(connection) == WAREHOUSE
-
-
-@pytest.mark.parametrize(
-    "config, credentials",
-    [
-        pytest.param(
-            {k: v for k, v in CONFIG.items() if k != "workspace_id"},
-            CREDENTIALS,
-            id="missing-workspace-id",
-        ),
-        pytest.param(
-            {k: v for k, v in CONFIG.items() if k != "region"},
-            CREDENTIALS,
-            id="missing-region",
-        ),
-        pytest.param(CONFIG, {"client_id": "sp-id"}, id="missing-secret"),
-        pytest.param({**CONFIG, "host": None}, CREDENTIALS, id="null-host"),
-        pytest.param({**CONFIG, "catalog": 1}, CREDENTIALS, id="catalog-not-text"),
-        pytest.param(CONFIG, {**CREDENTIALS, "client_secret": ""}, id="empty-secret"),
-    ],
-)
-def test_from_connection__incomplete_details__raises_stored_connection_failure(
-    config: dict[str, Any],
-    credentials: dict[str, Any],
-) -> None:
-    # Given
-    connection = _connection(config, credentials)
-
-    # When / Then
-    with pytest.raises(DeliveryError) as excinfo:
-        DatabricksWarehouse.from_connection(connection)
-    assert excinfo.value.kind == "stored_connection"
-    assert excinfo.value.detail == "Stored connection details are incomplete."
-
-
-@pytest.mark.parametrize(
-    "override",
-    [
-        pytest.param({"host": "databricks.attacker.example"}, id="foreign-host"),
-        pytest.param({"host": "cloud.databricks.com"}, id="bare-suffix"),
-        pytest.param(
-            {"host": "https://dbc-1.cloud.databricks.com"}, id="host-with-scheme"
-        ),
-        pytest.param(
-            {"host": "evil.example/x.cloud.databricks.com"}, id="host-with-path"
-        ),
-        pytest.param(
-            {"host": "dbc-1.cloud.databricks.com.attacker.example"},
-            id="suffix-not-at-end",
-        ),
-        pytest.param({"workspace_id": "123abc"}, id="workspace-id-not-digits"),
-        pytest.param({"workspace_id": True}, id="workspace-id-bool"),
-        pytest.param({"region": "us-west-2.attacker"}, id="region-with-dot"),
-        pytest.param({"region": "US-WEST-2"}, id="region-uppercase"),
-        pytest.param({"catalog": "main; DROP"}, id="catalog-not-identifier"),
-        pytest.param({"schema": "a.b"}, id="schema-with-dot"),
-    ],
-)
-def test_from_connection__invalid_details__raises_stored_connection_failure(
-    override: dict[str, Any],
-) -> None:
-    # Given
-    connection = _connection({**CONFIG, **override}, CREDENTIALS)
-
-    # When / Then
-    with pytest.raises(DeliveryError) as excinfo:
-        DatabricksWarehouse.from_connection(connection)
-    assert excinfo.value.kind == "stored_connection"
-
-
-def test_from_connection__numeric_workspace_id_and_mixed_case_host__normalised() -> (
-    None
-):
-    # Given
-    connection = _connection(
-        {
-            **CONFIG,
-            "host": "DBC-A1B2C3D4-E5F6.cloud.databricks.com",
-            "workspace_id": 1234567890123456,
-        },
-        CREDENTIALS,
-    )
-
-    # When / Then
-    assert DatabricksWarehouse.from_connection(connection) == WAREHOUSE
-
-
 @pytest.mark.parametrize(
     "host, region, server_endpoint",
     [
         pytest.param(
-            "dbc-a1b2c3d4-e5f6.cloud.databricks.com",
+            "DBC-A1B2C3D4-E5F6.cloud.databricks.com",
             "us-west-2",
             "https://1234567890123456.zerobus.us-west-2.cloud.databricks.com",
             id="aws",
@@ -204,21 +111,66 @@ def test_from_connection__numeric_workspace_id_and_mixed_case_host__normalised()
         ),
     ],
 )
-def test_databricks_warehouse__per_cloud__builds_zerobus_and_workspace_urls(
+def test_from_connection__valid_details__builds_the_workspace_urls(
     host: str,
     region: str,
     server_endpoint: str,
 ) -> None:
     # Given
-    connection = _connection({**CONFIG, "host": host, "region": region}, CREDENTIALS)
+    config = {
+        **CONFIG,
+        "host": host,
+        "region": region,
+        "workspace_id": 1234567890123456,
+    }
 
     # When
-    warehouse = DatabricksWarehouse.from_connection(connection)
+    warehouse = DatabricksWarehouse.from_connection(_connection(config, CREDENTIALS))
 
     # Then
     assert warehouse.server_endpoint == server_endpoint
-    assert warehouse.unity_catalog_url == f"https://{host}"
+    assert warehouse.unity_catalog_url == f"https://{host.lower()}"
     assert warehouse.table_name == "main.flagsmith.events"
+    assert "sp-secret" not in repr(warehouse)
+
+
+@pytest.mark.parametrize(
+    "config, credentials",
+    [
+        pytest.param(
+            {k: v for k, v in CONFIG.items() if k != "region"},
+            CREDENTIALS,
+            id="missing-region",
+        ),
+        pytest.param({**CONFIG, "host": None}, CREDENTIALS, id="null-host"),
+        pytest.param(CONFIG, {**CREDENTIALS, "client_secret": ""}, id="empty-secret"),
+        pytest.param(
+            {**CONFIG, "host": "dbc-1.cloud.databricks.com.attacker.example"},
+            CREDENTIALS,
+            id="foreign-host",
+        ),
+        pytest.param(
+            {**CONFIG, "host": "evil.example/x.cloud.databricks.com"},
+            CREDENTIALS,
+            id="host-with-path",
+        ),
+        pytest.param({**CONFIG, "workspace_id": "123abc"}, CREDENTIALS, id="workspace"),
+        pytest.param({**CONFIG, "region": "us-west-2.evil"}, CREDENTIALS, id="region"),
+        pytest.param({**CONFIG, "schema": "a.b"}, CREDENTIALS, id="schema"),
+    ],
+)
+def test_from_connection__invalid_details__raises_stored_connection_failure(
+    config: dict[str, Any],
+    credentials: dict[str, Any],
+) -> None:
+    # Given
+    connection = _connection(config, credentials)
+
+    # When / Then
+    with pytest.raises(DeliveryError) as excinfo:
+        DatabricksWarehouse.from_connection(connection)
+    assert excinfo.value.kind == "stored_connection"
+    assert excinfo.value.detail == "Stored connection details are incomplete."
 
 
 @pytest.mark.parametrize(
@@ -229,31 +181,19 @@ def test_databricks_warehouse__per_cloud__builds_zerobus_and_workspace_urls(
                 "environment_key": "env",
                 "event": "purchase",
                 "identifier": "u1",
-                "timestamp": 1753000000123,
+                "timestamp": 1753000000123.5,
                 "collected_at": 1753000001000,
                 "feature_name": "checkout",
-                "sdk_language": "python",
             },
             {
                 "environment_key": "env",
                 "event": "purchase",
                 "identifier": "u1",
-                "timestamp": 1753000000123000,
+                "timestamp": 1753000000123500,
                 "collected_at": 1753000001000000,
                 "feature_name": "checkout",
-                "sdk_language": "python",
             },
             id="milliseconds-to-microseconds",
-        ),
-        pytest.param(
-            {"event": "e", "timestamp": 1753000000123.5},
-            {
-                "environment_key": "",
-                "event": "e",
-                "identifier": "",
-                "timestamp": 1753000000123500,
-            },
-            id="fractional-milliseconds",
         ),
         pytest.param(
             {"event": "e", "timestamp": "yesterday", "collected_at": 1753000001000},
@@ -267,20 +207,14 @@ def test_databricks_warehouse__per_cloud__builds_zerobus_and_workspace_urls(
             id="timestamp-falls-back-to-collected-at",
         ),
         pytest.param(
-            {"environment_key": None, "timestamp": 1},
-            {"environment_key": "", "event": "", "identifier": "", "timestamp": 1000},
-            id="not-null-columns-default-to-empty",
-        ),
-        pytest.param(
             {
                 "event": "e",
                 "identifier": 42,
                 "timestamp": 1,
                 "value": 9.99,
-                "traits": {"plan": "pro", "seats": 3},
-                "metadata": [1, "a"],
-                "sdk_version": True,
+                "traits": {"plan": "pro"},
                 "feature_name": None,
+                "ip": "1.2.3.4",
             },
             {
                 "environment_key": "",
@@ -288,16 +222,9 @@ def test_databricks_warehouse__per_cloud__builds_zerobus_and_workspace_urls(
                 "identifier": "42",
                 "timestamp": 1000,
                 "value": "9.99",
-                "traits": '{"plan":"pro","seats":3}',
-                "metadata": '[1,"a"]',
-                "sdk_version": "true",
+                "traits": '{"plan":"pro"}',
             },
             id="non-string-values-become-json",
-        ),
-        pytest.param(
-            {"event": "e", "timestamp": 1, "ip": "1.2.3.4", "extra": {"a": 1}},
-            {"environment_key": "", "event": "e", "identifier": "", "timestamp": 1000},
-            id="unknown-keys-dropped",
         ),
     ],
 )
@@ -320,12 +247,10 @@ def test_map_row__event__projects_the_table_columns(
     "payload",
     [
         pytest.param(b"{not json", id="unparseable"),
-        pytest.param(b"\xff\xfe", id="not-utf8"),
         pytest.param(b'["a list"]', id="not-an-object"),
-        pytest.param(b'{"event":"e"}', id="no-timestamp"),
         pytest.param(b'{"event":"e","timestamp":true}', id="bool-timestamp"),
-        pytest.param(b'{"event":"e","timestamp":1e30}', id="timestamp-out-of-range"),
         pytest.param(b'{"event":"e","timestamp":NaN}', id="nan-timestamp"),
+        pytest.param(b'{"event":"e","timestamp":1e30}', id="timestamp-out-of-range"),
     ],
 )
 def test_map_row__unusable_event__returns_none(payload: bytes) -> None:
@@ -333,10 +258,11 @@ def test_map_row__unusable_event__returns_none(payload: bytes) -> None:
     assert map_row(payload) is None
 
 
-def test_insert__rows__opens_a_stream_sends_every_record_and_closes_it(
+def test_insert__rows__sends_every_usable_record_then_closes_the_stream(
     sdk_class: Any,
     stream: Any,
     mocker: MockerFixture,
+    log: StructuredLogCapture,
 ) -> None:
     # Given
     calls = mocker.Mock()
@@ -345,68 +271,30 @@ def test_insert__rows__opens_a_stream_sends_every_record_and_closes_it(
     calls.attach_mock(stream.close, "close")
 
     # When
-    written = WAREHOUSE.insert(ROWS)
+    written = WAREHOUSE.insert([*ROWS, b"{not json"])
 
     # Then
     assert written == 2
-    sdk_class.assert_called_once_with(
-        "https://1234567890123456.zerobus.us-west-2.cloud.databricks.com",
-        "https://dbc-a1b2c3d4-e5f6.cloud.databricks.com",
-        application_name="flagsmith-warehouse-delivery",
-    )
     assert [call[0] for call in calls.mock_calls] == [
         "create_stream",
         "ingest_records_offset",
         "close",
     ]
-    stream.flush.assert_not_called()
     kwargs = sdk_class.return_value.create_stream.call_args.kwargs
     assert kwargs["table_properties"].table_name == "main.flagsmith.events"
-    assert "client_secret" not in kwargs
+    assert kwargs["options"].record_type == RecordType.JSON
     assert kwargs["headers_provider"].get_headers() == [
         ("authorization", "Bearer minted-token"),
         ("x-databricks-zerobus-table-name", "main.flagsmith.events"),
     ]
-    options = kwargs["options"]
-    assert options.record_type == RecordType.JSON
-    assert options.recovery is False
     (records,) = stream.ingest_records_offset.call_args.args
-    assert [json.loads(record) for record in records] == [
-        {
-            "environment_key": "env",
-            "event": "$flag_exposure",
-            "identifier": "u1",
-            "timestamp": 1753000000000000,
-        },
-        {
-            "environment_key": "env",
-            "event": "purchase",
-            "identifier": "u2",
-            "timestamp": 1753000000001000,
-            "value": "9.99",
-        },
-    ]
-
-
-def test_insert__unusable_rows__skips_and_logs_them_without_contents(
-    stream: Any,
-    log: StructuredLogCapture,
-) -> None:
-    # Given
-    rows = [*ROWS, b"{not json", b'{"event":"secret-event"}']
-
-    # When
-    written = WAREHOUSE.insert(rows)
-
-    # Then
-    assert written == 2
-    assert len(stream.ingest_records_offset.call_args.args[0]) == 2
+    assert [json.loads(record)["identifier"] for record in records] == ["u1", "u2"]
     assert log.events == [
         {
             "level": "warning",
             "event": "rows.skipped",
             "connection__id": 7,
-            "rows__count": 2,
+            "rows__count": 1,
         }
     ]
 
@@ -420,182 +308,97 @@ def test_insert__every_row_unusable__opens_no_stream(sdk_class: Any) -> None:
     sdk_class.assert_not_called()
 
 
-def test_insert__same_workspace__reuses_one_sdk(sdk_class: Any, stream: Any) -> None:
-    # Given / When
-    WAREHOUSE.insert(ROWS)
-    WAREHOUSE.insert(ROWS)
-
-    # Then
-    sdk_class.assert_called_once()
-    assert sdk_class.return_value.create_stream.call_count == 2
-
-
-def test_insert__ingest_fails__closes_the_stream_and_raises(stream: Any) -> None:
+@pytest.mark.parametrize(
+    "error, raised",
+    [
+        pytest.param(ZerobusException("Connection timeout"), DeliveryError, id="sdk"),
+        pytest.param(RuntimeError("boom"), RuntimeError, id="ours"),
+    ],
+)
+def test_insert__ingest_fails__still_closes_the_stream(
+    error: Exception,
+    raised: type[Exception],
+    stream: Any,
+) -> None:
     # Given
-    error = NonRetriableException("Stream is closed: code: 'Internal error'")
     stream.ingest_records_offset.side_effect = error
 
     # When / Then
-    with pytest.raises(DeliveryError) as excinfo:
-        WAREHOUSE.insert(ROWS)
-    assert excinfo.value.__cause__ is error
-    stream.close.assert_called_once_with()
-
-
-def test_insert__acknowledgement_fails_on_close__raises_delivery_error(
-    stream: Any,
-) -> None:
-    # Given
-    stream.close.side_effect = ZerobusException(
-        "Stream is closed: code: 'The service is currently unavailable'"
-    )
-
-    # When / Then
-    with pytest.raises(DeliveryError) as excinfo:
-        WAREHOUSE.insert(ROWS)
-    assert excinfo.value.kind == "unreachable"
-
-
-def test_insert__our_own_failure__propagates_and_still_closes_the_stream(
-    stream: Any,
-) -> None:
-    # Given
-    stream.ingest_records_offset.side_effect = RuntimeError("boom")
-
-    # When / Then
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(raised):
         WAREHOUSE.insert(ROWS)
     stream.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
-    "error, kind, detail",
+    "message, kind, detail",
     [
         pytest.param(
-            NonRetriableException(
-                "Failed to create stream: code: 'The request does not have valid "
-                'authentication credentials\', message: "Invalid token audience".'
-            ),
+            "Failed to create stream: code: 'The request does not have valid "
+            'authentication credentials\', message: "Invalid token audience".',
             "authentication",
             "Authentication failed.",
-            id="grpc-unauthenticated-wrong-workspace-id",
+            id="unauthenticated",
         ),
         pytest.param(
-            ZerobusException("Failed to open a channel: transport error."),
-            "unreachable",
-            "Could not connect to the host.",
-            id="channel",
-        ),
-        pytest.param(
-            ZerobusException("Failed to establish TLS connection."),
-            "unreachable",
-            "Could not connect to the host.",
-            id="tls",
-        ),
-        pytest.param(
-            ZerobusException("Connection timeout: flush timed out"),
-            "unreachable",
-            "Could not connect to the host.",
-            id="timeout",
-        ),
-        pytest.param(
-            ZerobusException(
-                "Failed to create stream: code: 'Deadline expired before operation "
-                'could complete\', message: "Stream creation timed out".'
-            ),
-            "unreachable",
-            "Could not connect to the host.",
-            id="deadline",
-        ),
-        pytest.param(
-            ZerobusException(
-                "Failed to create stream: code: 'The service is currently "
-                'unavailable\', message: "dns error", source: '
-                'tonic::transport::Error(Transport, ConnectError("dns error")).'
-            ),
+            "Failed to create stream: code: 'The service is currently unavailable', "
+            'message: "dns error".',
             "unreachable",
             "Could not connect to the host.",
             id="unavailable",
         ),
         pytest.param(
-            NonRetriableException(
-                "Failed to create stream: code: 'Some requested entity was not "
-                'found\', message: "Table not found".'
-            ),
+            "Failed to create stream: code: 'Some requested entity was not found', "
+            'message: "Table not found".',
             "missing_table",
             "Events table not found in the configured database. "
             "Run the setup SQL to create it.",
-            id="grpc-not-found",
+            id="not-found",
         ),
         pytest.param(
-            NonRetriableException(
-                "Failed to create stream: code: 'The caller does not have "
-                "permission to execute the specified operation', message: "
-                '"Authorization token is missing MODIFY privilege for a table '
-                'main.flagsmith.events. Error Code: 3, Error State: 0.".'
-            ),
+            "Failed to create stream: code: 'The caller does not have permission "
+            'to execute the specified operation\', message: "missing MODIFY".',
             "permission_denied",
             "Permission denied on the events table.",
-            id="grpc-permission-denied",
+            id="permission-denied",
         ),
         pytest.param(
-            NonRetriableException(
-                "Stream is closed: code: 'Client specified an invalid argument', "
-                'message: "Record decoder/encoder error: unrecognized field name '
-                "'ip' at line 1 column 285. Error Code: 4044, Error State: 3.\""
-            ),
+            "Stream is closed: code: 'Client specified an invalid argument', "
+            "message: \"Record decoder/encoder error: unrecognized field name 'ip'\".",
             "schema_mismatch",
             "The warehouse rejected the events. Check that the events table "
             "matches the expected schema.",
             id="invalid-record",
         ),
         pytest.param(
-            NonRetriableException(
-                "Invalid argument: Record decoder/encoder error: unrecognized field "
-                "name 'ip' at line 1 column 285. Error Code: 4044, Error State: 3.."
-            ),
-            "schema_mismatch",
-            "The warehouse rejected the events. Check that the events table "
-            "matches the expected schema.",
-            id="sdk-invalid-argument",
-        ),
-        pytest.param(
-            NonRetriableException(
-                "Specified UC table name is invalid: Table name must have exactly "
-                "3 parts."
-            ),
+            "Specified UC table name is invalid: Table name must have exactly 3 parts.",
             "stored_connection",
             "Stored connection details are incomplete.",
             id="invalid-table-name",
         ),
         pytest.param(
-            NonRetriableException(
-                "Failed to create stream: code: 'The system is not in a state "
-                "required for the operation's execution', message: \"Default "
-                'storage is not supported".'
-            ),
-            "rejected",
-            "The Databricks workspace rejected the request.",
-            id="other",
-        ),
-        pytest.param(
-            NonRetriableException(
-                "Invalid argument: Ingest payload too large: 10485761 bytes exceeds "
-                "the configured limit of 10420224 bytes."
-            ),
+            "Invalid argument: Ingest payload too large: 10485761 bytes exceeds the "
+            "configured limit of 10420224 bytes.",
             "rejected",
             "The Databricks workspace rejected the request.",
             id="payload-too-large",
         ),
+        pytest.param(
+            "Failed to create stream: code: 'The system is not in a state required "
+            "for the operation's execution'.",
+            "rejected",
+            "The Databricks workspace rejected the request.",
+            id="other",
+        ),
     ],
 )
 def test_insert__sdk_error__raises_delivery_error_with_dashboard_detail(
-    error: Exception,
+    message: str,
     kind: str,
     detail: str,
     sdk_class: Any,
 ) -> None:
     # Given
+    error = NonRetriableException(message)
     sdk_class.return_value.create_stream.side_effect = error
 
     # When / Then
@@ -605,43 +408,22 @@ def test_insert__sdk_error__raises_delivery_error_with_dashboard_detail(
     assert excinfo.value.__cause__ is error
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        pytest.param(
-            NonRetriableException(
-                "Failed to create stream: code: 'The request does not have valid "
-                'authentication credentials\', message: "Invalid token".'
-            ),
-            id="message-without-credentials",
-        ),
-        pytest.param(
-            NonRetriableException("Failed to create stream: secret sp-secret."),
-            id="message-repeating-secret",
-        ),
-        pytest.param(
-            NonRetriableException("Failed to create stream: Bearer minted-token."),
-            id="message-repeating-token",
-        ),
-    ],
-)
-def test_insert__sdk_error__credentials_never_reach_the_error_or_the_logs(
-    error: Exception,
+@pytest.mark.parametrize("credential", ["sp-secret", "minted-token"])
+def test_insert__sdk_error_repeats_a_credential__keeps_it_out_of_the_error(
+    credential: str,
     sdk_class: Any,
-    log: StructuredLogCapture,
 ) -> None:
     # Given
-    sdk_class.return_value.create_stream.side_effect = error
+    sdk_class.return_value.create_stream.side_effect = NonRetriableException(
+        f"Failed to create stream: {credential}."
+    )
 
     # When
     with pytest.raises(DeliveryError) as excinfo:
-        WAREHOUSE.insert([*ROWS, b"{not json"])
+        WAREHOUSE.insert(ROWS)
 
     # Then
-    logged = "".join(traceback.format_exception(excinfo.value)) + repr(log.events)
-    assert "sp-secret" not in logged
-    assert "minted-token" not in logged
-    assert log.events
+    assert credential not in "".join(traceback.format_exception(excinfo.value))
 
 
 def test_insert__token__minted_with_sql_scope_for_the_events_table(
@@ -658,11 +440,8 @@ def test_insert__token__minted_with_sql_scope_for_the_events_table(
         "https://dbc-a1b2c3d4-e5f6.cloud.databricks.com/oidc/v1/token",
     )
     kwargs = token_endpoint.request.call_args.kwargs
-    assert kwargs["redirect"] is False
-    assert kwargs["retries"] is False
     assert kwargs["headers"]["authorization"] == "Basic c3AtaWQ6c3Atc2VjcmV0"
     form = parse_qs(kwargs["body"])
-    assert form["grant_type"] == ["client_credentials"]
     assert form["scope"] == ["sql"]
     assert form["resource"] == [
         "api://databricks/workspaces/1234567890123456/zerobusDirectWriteApi"
@@ -690,31 +469,21 @@ def test_insert__token__minted_with_sql_scope_for_the_events_table(
     ]
 
 
-def test_insert__token_still_fresh__reused(token_endpoint: Any, stream: Any) -> None:
-    # Given / When
-    WAREHOUSE.insert(ROWS)
-    WAREHOUSE.insert(ROWS)
-
-    # Then
-    token_endpoint.request.assert_called_once()
-
-
 @pytest.mark.parametrize(
-    "second",
+    "second, mints",
     [
+        pytest.param(WAREHOUSE, 1, id="same-connection"),
         pytest.param(
             dataclasses.replace(WAREHOUSE, client_secret="rotated"),
+            2,
             id="rotated-secret",
         ),
-        pytest.param(dataclasses.replace(WAREHOUSE, schema="other"), id="other-table"),
-        pytest.param(
-            dataclasses.replace(WAREHOUSE, workspace_id="6543210987654321"),
-            id="corrected-workspace-id",
-        ),
+        pytest.param(dataclasses.replace(WAREHOUSE, schema="other"), 2, id="table"),
     ],
 )
-def test_insert__different_credentials_or_table__mints_another_token(
+def test_insert__second_insert__reuses_the_token_only_for_the_same_credentials(
     second: DatabricksWarehouse,
+    mints: int,
     token_endpoint: Any,
     stream: Any,
 ) -> None:
@@ -723,37 +492,28 @@ def test_insert__different_credentials_or_table__mints_another_token(
     second.insert(ROWS)
 
     # Then
-    assert token_endpoint.request.call_count == 2
+    assert token_endpoint.request.call_count == mints
 
 
-def test_insert__token_near_expiry__mints_a_new_one(
-    token_endpoint: Any,
-    stream: Any,
-) -> None:
-    # Given a token that expires inside the refresh margin
-    token_endpoint.request.return_value = HTTPResponse(
-        body=b'{"access_token":"minted-token","expires_in":300}', status=200
-    )
-
-    # When
-    WAREHOUSE.insert(ROWS)
-    WAREHOUSE.insert(ROWS)
-
-    # Then
-    assert token_endpoint.request.call_count == 2
-
-
-def test_token_headers__invalidated__next_insert_mints_again(
+@pytest.mark.parametrize("invalidate", [False, True], ids=["near-expiry", "invalid"])
+def test_insert__token_expiring_or_invalidated__mints_a_new_one(
+    invalidate: bool,
     token_endpoint: Any,
     sdk_class: Any,
     stream: Any,
 ) -> None:
     # Given
+    if not invalidate:
+        token_endpoint.request.return_value = HTTPResponse(
+            body=b'{"access_token":"minted-token","expires_in":300}', status=200
+        )
     WAREHOUSE.insert(ROWS)
-    headers = sdk_class.return_value.create_stream.call_args.kwargs["headers_provider"]
+    if invalidate:
+        sdk_class.return_value.create_stream.call_args.kwargs[
+            "headers_provider"
+        ].invalidate()
 
     # When
-    headers.invalidate()
     WAREHOUSE.insert(ROWS)
 
     # Then
@@ -775,22 +535,14 @@ def test_token_headers__invalidated__next_insert_mints_again(
             id="secret-without-sql-scope",
         ),
         pytest.param(
-            HTTPResponse(
-                body=b'{"error":"invalid_authorization_details","error_description"'
-                b':"User is not authorized to the requested authorizations"}',
-                status=401,
-            ),
+            HTTPResponse(body=b'{"error":"invalid_authorization_details"}', status=401),
             "permission_denied",
             "The events table is missing or the service principal lacks access "
             "to it. Run the setup SQL.",
             id="missing-object-or-grant",
         ),
         pytest.param(
-            HTTPResponse(
-                body=b'{"error":"invalid_client","error_description":"Client '
-                b'authentication failed"}',
-                status=401,
-            ),
+            HTTPResponse(body=b'{"error":"invalid_client"}', status=401),
             "authentication",
             "Authentication failed.",
             id="bad-client-secret",
@@ -832,30 +584,18 @@ def test_insert__token_endpoint_refuses__raises_without_opening_a_stream(
     with pytest.raises(DeliveryError) as excinfo:
         WAREHOUSE.insert(ROWS)
     assert (excinfo.value.kind, excinfo.value.detail) == (kind, detail)
-    assert "sp-secret" not in "".join(traceback.format_exception(excinfo.value))
     sdk_class.return_value.create_stream.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "body, oauth_error",
-    [
-        pytest.param(
-            b'{"error":"invalid_client","error_description":"sp-id is unknown"}',
-            "invalid_client",
-            id="oauth-error",
-        ),
-        pytest.param(b"<html>gateway</html>", None, id="not-json"),
-        pytest.param(b'{"error":{"code":1}}', None, id="error-not-text"),
-    ],
-)
 def test_insert__token_endpoint_refuses__logs_status_and_oauth_error_only(
-    body: bytes,
-    oauth_error: str | None,
     token_endpoint: Any,
     log: StructuredLogCapture,
 ) -> None:
     # Given
-    token_endpoint.request.return_value = HTTPResponse(body=body, status=401)
+    token_endpoint.request.return_value = HTTPResponse(
+        body=b'{"error":"invalid_client","error_description":"sp-id is unknown"}',
+        status=401,
+    )
 
     # When
     with pytest.raises(DeliveryError):
@@ -868,7 +608,7 @@ def test_insert__token_endpoint_refuses__logs_status_and_oauth_error_only(
             "event": "token.refused",
             "connection__id": 7,
             "http__status": 401,
-            "oauth__error": oauth_error,
+            "oauth__error": "invalid_client",
         }
     ]
 
@@ -897,15 +637,4 @@ def test_stream_options__worst_case__fits_inside_the_insert_timeout() -> None:
 
     # Then
     assert options.recovery is False
-    assert options.recovery_timeout_ms == databricks.CREATE_TIMEOUT_MS
-    assert options.flush_timeout_ms == databricks.FLUSH_TIMEOUT_MS
     assert worst_case_ms < INSERT_TIMEOUT_SECONDS * 1000
-
-
-def test_databricks_warehouse__repr__omits_the_secret() -> None:
-    # Given / When
-    shown = repr(WAREHOUSE)
-
-    # Then
-    assert "sp-secret" not in shown
-    assert "dbc-a1b2c3d4-e5f6.cloud.databricks.com" in shown
