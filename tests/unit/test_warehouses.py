@@ -1,6 +1,7 @@
 from warehouse_delivery.connections import WarehouseConnection
 from warehouse_delivery.warehouses import warehouse_for
 from warehouse_delivery.warehouses.clickhouse import ClickHouseWarehouse
+from warehouse_delivery.warehouses.databricks import DatabricksWarehouse
 
 CONFIG = {
     "host": "ch.acme-corp.example",
@@ -31,6 +32,38 @@ def test_warehouse_for__clickhouse_connection__builds_the_clickhouse_adapter() -
         username="acme_svc",
         password="hunter2",
         secure=True,
+    )
+
+
+def test_warehouse_for__databricks_connection__builds_the_databricks_adapter() -> None:
+    # Given
+    connection = WarehouseConnection(
+        id=7,
+        warehouse_type="databricks",
+        config={
+            "host": "dbc-a1b2c3d4-e5f6.cloud.databricks.com",
+            "warehouse_id": "abc123",
+            "catalog": "main",
+            "schema": "flagsmith",
+            "workspace_id": "1234567890123456",
+            "region": "us-west-2",
+        },
+        credentials={"client_id": "sp-id", "client_secret": "sp-secret"},
+    )
+
+    # When
+    warehouse = warehouse_for(connection)
+
+    # Then
+    assert warehouse == DatabricksWarehouse(
+        connection_id=7,
+        host="dbc-a1b2c3d4-e5f6.cloud.databricks.com",
+        workspace_id="1234567890123456",
+        region="us-west-2",
+        catalog="main",
+        schema="flagsmith",
+        client_id="sp-id",
+        client_secret="sp-secret",
     )
 
 
