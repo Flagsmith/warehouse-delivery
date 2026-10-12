@@ -36,7 +36,6 @@ make run
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
 | `SENTRY_DSN` | unset | Where error logs and crashes are reported; unset turns Sentry off |
 | `SENTRY_ENVIRONMENT` | `production` | Environment the Sentry events are tagged with |
-| `SENTRY_RELEASE` | unset | Release the Sentry events are tagged with |
 
 ## Kafka topics
 

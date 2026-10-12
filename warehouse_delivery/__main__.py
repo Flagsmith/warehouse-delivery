@@ -139,7 +139,7 @@ def main() -> None:
     """If either loop fails for a reason on our side, such as Postgres being
     down or a bug, the process exits so ECS restarts it, and Kafka hands back
     the messages that were never marked done."""
-    # Reads SENTRY_DSN, SENTRY_ENVIRONMENT and SENTRY_RELEASE; without a DSN it
+    # Reads SENTRY_DSN and SENTRY_ENVIRONMENT; without a DSN it
     # does nothing. Initialised first so a bad config is reported too.
     sentry_sdk.init()
     configure_logging()
