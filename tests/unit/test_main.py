@@ -2,10 +2,17 @@ import threading
 
 import psycopg
 import pytest
+import sentry_sdk
+import structlog
 from psycopg_pool import PoolTimeout
 from pytest_mock import MockerFixture
+from sentry_sdk.transport import Transport
 
-from warehouse_delivery.__main__ import build_database_pool, run_loops
+from warehouse_delivery.__main__ import (
+    build_database_pool,
+    configure_logging,
+    run_loops,
+)
 from warehouse_delivery.config import Config
 
 
@@ -71,3 +78,27 @@ def test_run_loops__one_loop_raises__others_stopped_and_error_raised() -> None:
     with pytest.raises(RuntimeError, match="postgres down"):
         run_loops([failing, until_stopped], stop)
     assert told_to_stop == [True]
+
+
+def test_configure_logging__warning_and_error_logged__only_error_sent_to_sentry(
+    mocker: MockerFixture,
+) -> None:
+    # Given Sentry and the service's logging set up
+    transport = mocker.Mock(spec=Transport)
+    sentry_sdk.init(dsn="https://key@sentry.invalid/1", transport=transport)
+    configure_logging()
+    logger = structlog.get_logger("warehouse")
+
+    # When
+    logger.warning("something.odd")
+    logger.error("something.broke")
+    sentry_sdk.flush()
+
+    # Then
+    events = [
+        envelope.get_event()
+        for (envelope,), _ in transport.capture_envelope.call_args_list
+    ]
+    assert [event["message"] for event in events] == ["something.broke"]
+    sentry_sdk.init()
+    structlog.reset_defaults()
