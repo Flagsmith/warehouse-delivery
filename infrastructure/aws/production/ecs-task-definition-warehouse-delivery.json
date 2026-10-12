@@ -21,6 +21,10 @@
                 {
                     "name": "KAFKA_BOOTSTRAP_SERVERS",
                     "value": "boot-1e3.eventsingestionkafka.usdlws.c4.kafka.eu-west-2.amazonaws.com:9096,boot-5gt.eventsingestionkafka.usdlws.c4.kafka.eu-west-2.amazonaws.com:9096,boot-q1c.eventsingestionkafka.usdlws.c4.kafka.eu-west-2.amazonaws.com:9096"
+                },
+                {
+                    "name": "SENTRY_ENVIRONMENT",
+                    "value": "production"
                 }
             ],
             "secrets": [
@@ -39,6 +43,10 @@
                 {
                     "name": "DATABASE_URL",
                     "valueFrom": "arn:aws:secretsmanager:eu-west-2:084060095745:secret:WAREHOUSE-DELIVERY-nnCpJH:DATABASE_URL::"
+                },
+                {
+                    "name": "SENTRY_DSN",
+                    "valueFrom": "arn:aws:secretsmanager:eu-west-2:084060095745:secret:WAREHOUSE-DELIVERY-nnCpJH:SENTRY_DSN::"
                 }
             ],
             "logConfiguration": {
