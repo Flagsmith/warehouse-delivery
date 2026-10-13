@@ -299,6 +299,30 @@ def test_insert__rows__sends_every_usable_record_then_closes_the_stream(
     ]
 
 
+def test_insert__records_over_the_payload_limit__ingests_them_in_chunks(
+    stream: Any,
+    mocker: MockerFixture,
+) -> None:
+    # Given
+    first, second = (map_row(row) for row in ROWS)
+    assert first is not None and second is not None
+    limit = len(first) + len(second)
+    mocker.patch.object(databricks, "MAX_PAYLOAD_BYTES", limit)
+    third = ROWS[0].replace(b'"u1"', b'"u3"')
+    oversized = json.dumps({**json.loads(ROWS[0]), "value": "x" * limit}).encode()
+
+    # When
+    written = WAREHOUSE.insert([*ROWS, oversized, third])
+
+    # Then
+    assert written == 3
+    assert [
+        [json.loads(record)["identifier"] for record in call.args[0]]
+        for call in stream.ingest_records_offset.call_args_list
+    ] == [["u1", "u2"], ["u3"]]
+    stream.close.assert_called_once_with()
+
+
 def test_insert__every_row_unusable__opens_no_stream(sdk_class: Any) -> None:
     # Given / When
     written = WAREHOUSE.insert([b"{not json"])
