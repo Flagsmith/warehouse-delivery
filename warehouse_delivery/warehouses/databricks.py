@@ -4,7 +4,7 @@ import math
 import re
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -48,6 +48,9 @@ CREATE_TIMEOUT_MS = 15_000
 FLUSH_TIMEOUT_MS = 20_000
 PAUSED_CLOSE_TIMEOUT_MS = 5_000
 SDK_SHUTDOWN_MS = 1_100
+
+# Zerobus rejects an ingest call over 10,420,224 bytes, framing included.
+MAX_PAYLOAD_BYTES = 9 * 1024 * 1024
 
 # Range of a Delta TIMESTAMP, 0001-01-01 to 9999-12-31, in microseconds.
 MIN_TIMESTAMP_MICROS = -62_135_596_800_000_000
@@ -195,7 +198,8 @@ class DatabricksWarehouse:
                 headers_provider=_TokenHeaders(self, token),
             )
             try:
-                stream.ingest_records_offset(records)
+                for chunk in _chunks(records):
+                    stream.ingest_records_offset(chunk)
             finally:
                 # close() flushes, so it is the one wait for acknowledgements.
                 stream.close()
@@ -253,7 +257,22 @@ def map_row(payload: bytes) -> str | None:
     for column in NULLABLE_COLUMNS:
         if (text := _as_column_text(event.get(column))) is not None:
             record[column] = text
-    return json.dumps(record, separators=(",", ":"))
+    text = json.dumps(record, separators=(",", ":"))
+    # json.dumps escapes non-ASCII, so the length is the size in bytes.
+    return text if len(text) <= MAX_PAYLOAD_BYTES else None
+
+
+def _chunks(records: list[str]) -> Iterator[list[str]]:
+    chunk: list[str] = []
+    size = 0
+    for record in records:
+        if chunk and size + len(record) > MAX_PAYLOAD_BYTES:
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(record)
+        size += len(record)
+    if chunk:
+        yield chunk
 
 
 def _epoch_millis_to_micros(milliseconds: Any) -> int | None:
