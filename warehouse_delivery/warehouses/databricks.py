@@ -242,20 +242,20 @@ def map_row(payload: bytes) -> str | None:
         return None
     if not isinstance(event, dict):
         return None
-    timestamp = _micros(event.get("timestamp"))
-    collected_at = _micros(event.get("collected_at"))
+    timestamp = _epoch_millis_to_micros(event.get("timestamp"))
+    collected_at = _epoch_millis_to_micros(event.get("collected_at"))
     if timestamp is None:
         timestamp = collected_at
     if timestamp is None:
         return None
     record: dict[str, str | int] = {
-        column: _text(event.get(column)) or "" for column in NOT_NULL_COLUMNS
+        column: _as_column_text(event.get(column)) or "" for column in NOT_NULL_COLUMNS
     }
     record["timestamp"] = timestamp
     if collected_at is not None:
         record["collected_at"] = collected_at
     for column in NULLABLE_COLUMNS:
-        if (text := _text(event.get(column))) is not None:
+        if (text := _as_column_text(event.get(column))) is not None:
             record[column] = text
     text = json.dumps(record, separators=(",", ":"))
     # json.dumps escapes non-ASCII, so the length is the size in bytes.
@@ -275,7 +275,7 @@ def _chunks(records: list[str]) -> Iterator[list[str]]:
         yield chunk
 
 
-def _micros(milliseconds: Any) -> int | None:
+def _epoch_millis_to_micros(milliseconds: Any) -> int | None:
     if isinstance(milliseconds, bool) or not isinstance(milliseconds, int | float):
         return None
     if not math.isfinite(milliseconds):
@@ -286,7 +286,7 @@ def _micros(milliseconds: Any) -> int | None:
     return micros
 
 
-def _text(value: Any) -> str | None:
+def _as_column_text(value: Any) -> str | None:
     if value is None or isinstance(value, str):
         return value
     return json.dumps(value, separators=(",", ":"))
