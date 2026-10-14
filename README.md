@@ -34,6 +34,8 @@ make run
 | `BATCH_MAX_RECORDS` | `5000` | Records per consumed batch |
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
+| `SENTRY_DSN` | unset | Where error logs and crashes are reported; unset turns Sentry off |
+| `SENTRY_ENVIRONMENT` | `production` | Environment the Sentry events are tagged with |
 
 ## Kafka topics
 

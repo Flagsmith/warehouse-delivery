@@ -6,9 +6,11 @@ from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
 
+import sentry_sdk
 import structlog
 from confluent_kafka import Consumer, Producer
 from psycopg_pool import ConnectionPool, PoolTimeout
+from structlog_sentry import SentryProcessor
 
 from warehouse_delivery.config import Config
 from warehouse_delivery.connection_status import PostgresConnectionStatusWriter
@@ -34,6 +36,9 @@ def configure_logging() -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
+            # Must run before format_exc_info, which turns the exception into
+            # text Sentry can't group on.
+            SentryProcessor(event_level=logging.ERROR),
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
@@ -134,6 +139,9 @@ def main() -> None:
     """If either loop fails for a reason on our side, such as Postgres being
     down or a bug, the process exits so ECS restarts it, and Kafka hands back
     the messages that were never marked done."""
+    # Reads SENTRY_DSN and SENTRY_ENVIRONMENT; without a DSN it
+    # does nothing. Initialised first so a bad config is reported too.
+    sentry_sdk.init()
     configure_logging()
     config = Config.from_env()
     stop = threading.Event()
