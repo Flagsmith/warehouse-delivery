@@ -35,7 +35,6 @@ make run
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
 | `DATABASE_POOL_SIZE` | `4` | Connections to Flagsmith's Postgres, shared by both loops |
-| `BLOCK_INTERNAL_WAREHOUSE_HOSTS` | `false` | `true` refuses warehouse hosts that resolve to internal addresses and connects to the checked address. Set on SaaS |
 | `SENTRY_DSN` | unset | Where error logs and crashes are reported; unset turns Sentry off |
 | `SENTRY_ENVIRONMENT` | `production` | Environment the Sentry events are tagged with |
 

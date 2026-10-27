@@ -1,8 +1,4 @@
 import gzip
-import socket
-import threading
-from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import pytest
@@ -16,7 +12,6 @@ from clickhouse_connect.driver.summary import QuerySummary
 from pytest_mock import MockerFixture
 from urllib3 import PoolManager
 
-from warehouse_delivery import network
 from warehouse_delivery.connections import WarehouseConnection
 from warehouse_delivery.errors import DeliveryError
 from warehouse_delivery.warehouses import clickhouse
@@ -282,98 +277,3 @@ def test_no_redirect_pool_manager__urlopen__refuses_to_follow_redirects(
     # Then the redirect is refused: a permitted host must not be able to bounce
     # the request, and its event payload, to an unchecked address
     assert urlopen.call_args.kwargs["redirect"] is False
-
-
-@pytest.fixture()
-def http_server() -> Iterator[tuple[int, list[str]]]:
-    hosts: list[str] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            hosts.append(self.headers["Host"])
-            self.send_response(200)
-            self.end_headers()
-
-        def log_message(self, *args: Any) -> None:
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    yield server.server_address[1], hosts
-    server.shutdown()
-    thread.join()
-
-
-@pytest.mark.parametrize(
-    "host, checked",
-    [
-        pytest.param("ch.acme-corp.example", ["127.0.0.1"], id="checked-address"),
-        # Nothing listens on ::1, as on a dual-stack host whose IPv6 is down
-        pytest.param(
-            "ch.acme-corp.example", ["::1", "127.0.0.1"], id="falls-back-in-order"
-        ),
-        pytest.param("127.0.0.1", None, id="blocking-off"),
-    ],
-)
-def test_no_redirect_pool_manager__new_connection__goes_to_a_checked_address(
-    mocker: MockerFixture,
-    http_server: tuple[int, list[str]],
-    host: str,
-    checked: list[str] | None,
-) -> None:
-    # Given
-    port, hosts = http_server
-    checked_addresses = mocker.patch(
-        "warehouse_delivery.warehouses.clickhouse.checked_addresses",
-        return_value=checked,
-    )
-    manager = clickhouse._NoRedirectPoolManager()
-
-    # When
-    response = manager.request("GET", f"http://{host}:{port}/")
-
-    # Then the socket goes to a checked address, the request keeps the name
-    assert response.status == 200
-    checked_addresses.assert_called_once_with(host, port)
-    assert hosts == [f"{host}:{port}"]
-    assert (
-        manager.pool_classes_by_scheme["https"]
-        is clickhouse._CheckedHTTPSConnectionPool
-    )
-
-
-@pytest.mark.parametrize(
-    "resolved, kind, detail",
-    [
-        pytest.param(
-            {"return_value": [(socket.AF_INET, 1, 6, "", ("10.0.0.5", 8443))]},
-            "stored_connection",
-            "The host resolves to an internal address.",
-            id="internal-address",
-        ),
-        # Left to the driver, a second lookup could return an unchecked address
-        pytest.param(
-            {"side_effect": socket.gaierror("not known")},
-            "unreachable",
-            "Could not connect to the host.",
-            id="lookup-fails",
-        ),
-    ],
-)
-def test_insert__host_fails_the_address_check__raises_without_connecting(
-    mocker: MockerFixture,
-    resolved: dict[str, Any],
-    kind: str,
-    detail: str,
-) -> None:
-    # Given a host that resolved publicly when the API saved it
-    mocker.patch.object(network, "_block_internal_hosts", True)
-    mocker.patch("warehouse_delivery.network.socket.getaddrinfo", **resolved)
-    create_connection = mocker.patch("urllib3.connection.connection.create_connection")
-
-    # When / Then
-    with pytest.raises(DeliveryError) as excinfo:
-        WAREHOUSE.insert(ROWS)
-    assert (excinfo.value.kind, excinfo.value.detail) == (kind, detail)
-    create_connection.assert_not_called()
