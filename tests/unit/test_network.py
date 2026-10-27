@@ -19,7 +19,10 @@ UNREACHABLE = ("unreachable", "Could not connect to the host.")
             True, socket.gaierror("not known"), UNREACHABLE, id="unresolvable"
         ),
         pytest.param(
-            True, ["2606:4700::1111", "1.1.1.1"], "2606:4700::1111", id="public"
+            True,
+            ["2606:4700::1111", "1.1.1.1", "1.1.1.1"],
+            ["2606:4700::1111", "1.1.1.1"],
+            id="public",
         ),
         pytest.param(True, ["127.0.0.1"], INTERNAL, id="loopback"),
         pytest.param(True, ["10.0.0.5"], INTERNAL, id="private"),
@@ -29,7 +32,7 @@ UNREACHABLE = ("unreachable", "Could not connect to the host.")
         pytest.param(True, ["1.1.1.1", "10.0.0.5"], INTERNAL, id="mixed-records"),
     ],
 )
-def test_checked_address__resolved_addresses__decide_where_to_connect(
+def test_checked_addresses__resolved_addresses__decide_where_to_connect(
     mocker: MockerFixture,
     blocking: bool,
     resolved: list[str] | Exception,
@@ -50,8 +53,8 @@ def test_checked_address__resolved_addresses__decide_where_to_connect(
     # When / Then
     if isinstance(expected, tuple):
         with pytest.raises(DeliveryError) as excinfo:
-            network.checked_address("pg.acme-corp.example", 5432)
+            network.checked_addresses("pg.acme-corp.example", 5432)
         assert (excinfo.value.kind, excinfo.value.detail) == expected
     else:
-        assert network.checked_address("pg.acme-corp.example", 5432) == expected
+        assert network.checked_addresses("pg.acme-corp.example", 5432) == expected
     assert getaddrinfo.called is blocking
