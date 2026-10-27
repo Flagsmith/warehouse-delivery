@@ -7,14 +7,17 @@ from pytest_mock import MockerFixture
 from warehouse_delivery import network
 from warehouse_delivery.errors import DeliveryError
 
-INTERNAL = object()
+INTERNAL = ("stored_connection", "The host resolves to an internal address.")
+UNREACHABLE = ("unreachable", "Could not connect to the host.")
 
 
 @pytest.mark.parametrize(
     "blocking, resolved, expected",
     [
         pytest.param(False, ["10.0.0.5"], None, id="blocking-off"),
-        pytest.param(True, socket.gaierror("not known"), None, id="unresolvable"),
+        pytest.param(
+            True, socket.gaierror("not known"), UNREACHABLE, id="unresolvable"
+        ),
         pytest.param(
             True, ["2606:4700::1111", "1.1.1.1"], "2606:4700::1111", id="public"
         ),
@@ -45,11 +48,10 @@ def test_checked_address__resolved_addresses__decide_where_to_connect(
     )
 
     # When / Then
-    if expected is INTERNAL:
+    if isinstance(expected, tuple):
         with pytest.raises(DeliveryError) as excinfo:
             network.checked_address("pg.acme-corp.example", 5432)
-        assert excinfo.value.kind == "stored_connection"
-        assert excinfo.value.detail == "The host resolves to an internal address."
+        assert (excinfo.value.kind, excinfo.value.detail) == expected
     else:
         assert network.checked_address("pg.acme-corp.example", 5432) == expected
     assert getaddrinfo.called is blocking
