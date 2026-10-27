@@ -3,6 +3,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import psycopg
 import structlog
@@ -14,6 +15,7 @@ from warehouse_delivery.connections import (
     WarehouseConnection,
 )
 from warehouse_delivery.errors import DeliveryError
+from warehouse_delivery.network import checked_address
 from warehouse_delivery.warehouses.rows import EventRow, parse_event
 
 logger = structlog.get_logger("warehouse")
@@ -161,7 +163,12 @@ class PostgresWarehouse:
         return len(events)
 
     def _connect(self) -> psycopg.Connection:
+        # libpq connects to hostaddr without resolving the host again, and
+        # still uses the host for SNI.
+        address = checked_address(self.host, self.port)
+        pinned: dict[str, Any] = {"hostaddr": address} if address else {}
         return psycopg.connect(
+            **pinned,
             host=self.host,
             port=self.port,
             dbname=self.database,

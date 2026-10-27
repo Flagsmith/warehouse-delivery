@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import socket
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +13,7 @@ from psycopg.conninfo import conninfo_to_dict
 from pytest_mock import MockerFixture
 from pytest_structlog import StructuredLogCapture
 
+from warehouse_delivery import network
 from warehouse_delivery.connections import WarehouseConnection
 from warehouse_delivery.errors import DeliveryError
 from warehouse_delivery.warehouses import postgres
@@ -212,17 +214,31 @@ def test_timeouts__worst_case__fits_inside_the_insert_timeout() -> None:
     assert worst_case_ms < INSERT_TIMEOUT_SECONDS * 1000
 
 
+@pytest.mark.parametrize(
+    "checked, pinned",
+    [
+        pytest.param(None, {}, id="blocking-off"),
+        pytest.param("203.0.113.7", {"hostaddr": "203.0.113.7"}, id="pinned"),
+    ],
+)
 def test_insert__connect__passes_the_stored_details_and_timeouts(
     mocker: MockerFixture,
+    checked: str | None,
+    pinned: dict[str, str],
 ) -> None:
     # Given
+    checked_address = mocker.patch(
+        "warehouse_delivery.warehouses.postgres.checked_address", return_value=checked
+    )
     connect = mocker.patch("warehouse_delivery.warehouses.postgres.psycopg.connect")
 
     # When
     WAREHOUSE.insert([_payload(EXPOSURE)])
 
     # Then
+    checked_address.assert_called_once_with("pg.acme-corp.example", 5432)
     connect.assert_called_once_with(
+        **pinned,
         host="pg.acme-corp.example",
         port=5432,
         dbname="acme_dwh",
@@ -236,6 +252,33 @@ def test_insert__connect__passes_the_stored_details_and_timeouts(
         keepalives_interval=5,
         keepalives_count=3,
     )
+
+
+def test_insert__host_resolves_to_an_internal_address__raises_without_connecting(
+    mocker: MockerFixture,
+) -> None:
+    # Given a host that now resolves to an internal address among public ones
+    network.block_internal_hosts(True)
+    mocker.patch(
+        "warehouse_delivery.network.socket.getaddrinfo",
+        return_value=[
+            (socket.AF_INET, 1, 6, "", ("203.0.113.7", 5432)),
+            (socket.AF_INET, 1, 6, "", ("10.0.0.5", 5432)),
+        ],
+    )
+    connect = mocker.patch("warehouse_delivery.warehouses.postgres.psycopg.connect")
+
+    # When
+    try:
+        with pytest.raises(DeliveryError) as excinfo:
+            WAREHOUSE.insert([_payload(EXPOSURE)])
+    finally:
+        network.block_internal_hosts(False)
+
+    # Then
+    assert excinfo.value.kind == "stored_connection"
+    assert excinfo.value.detail == "The host resolves to an internal address."
+    connect.assert_not_called()
 
 
 def test_insert__no_usable_rows__does_not_connect(mocker: MockerFixture) -> None:
