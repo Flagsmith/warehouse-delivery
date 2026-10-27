@@ -15,7 +15,7 @@ from warehouse_delivery.connections import (
     WarehouseConnection,
 )
 from warehouse_delivery.errors import DeliveryError
-from warehouse_delivery.network import checked_address
+from warehouse_delivery.network import checked_addresses
 from warehouse_delivery.warehouses.rows import EventRow, parse_event
 
 logger = structlog.get_logger("warehouse")
@@ -164,12 +164,18 @@ class PostgresWarehouse:
 
     def _connect(self) -> psycopg.Connection:
         # libpq connects to hostaddr without resolving the host again, and
-        # still uses the host for SNI.
-        address = checked_address(self.host, self.port)
-        pinned: dict[str, Any] = {"hostaddr": address} if address else {}
+        # still uses the host for SNI. One host per address so each is tried.
+        addresses = checked_addresses(self.host, self.port)
+        pinned: dict[str, Any] = (
+            {
+                "hostaddr": ",".join(addresses),
+                "host": ",".join([self.host] * len(addresses)),
+            }
+            if addresses
+            else {"host": self.host}
+        )
         return psycopg.connect(
             **pinned,
-            host=self.host,
             port=self.port,
             dbname=self.database,
             user=self.username,

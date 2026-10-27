@@ -217,18 +217,32 @@ def test_timeouts__worst_case__fits_inside_the_insert_timeout() -> None:
 @pytest.mark.parametrize(
     "checked, pinned",
     [
-        pytest.param(None, {}, id="blocking-off"),
-        pytest.param("203.0.113.7", {"hostaddr": "203.0.113.7"}, id="pinned"),
+        pytest.param(None, {"host": "pg.acme-corp.example"}, id="blocking-off"),
+        pytest.param(
+            ["203.0.113.7"],
+            {"host": "pg.acme-corp.example", "hostaddr": "203.0.113.7"},
+            id="pinned",
+        ),
+        # libpq tries each host and hostaddr pair in turn
+        pytest.param(
+            ["2001:db8::7", "203.0.113.7"],
+            {
+                "host": "pg.acme-corp.example,pg.acme-corp.example",
+                "hostaddr": "2001:db8::7,203.0.113.7",
+            },
+            id="dual-stack-falls-back",
+        ),
     ],
 )
 def test_insert__connect__passes_the_stored_details_and_timeouts(
     mocker: MockerFixture,
-    checked: str | None,
+    checked: list[str] | None,
     pinned: dict[str, str],
 ) -> None:
     # Given
-    checked_address = mocker.patch(
-        "warehouse_delivery.warehouses.postgres.checked_address", return_value=checked
+    checked_addresses = mocker.patch(
+        "warehouse_delivery.warehouses.postgres.checked_addresses",
+        return_value=checked,
     )
     connect = mocker.patch("warehouse_delivery.warehouses.postgres.psycopg.connect")
 
@@ -236,10 +250,9 @@ def test_insert__connect__passes_the_stored_details_and_timeouts(
     WAREHOUSE.insert([_payload(EXPOSURE)])
 
     # Then
-    checked_address.assert_called_once_with("pg.acme-corp.example", 5432)
+    checked_addresses.assert_called_once_with("pg.acme-corp.example", 5432)
     connect.assert_called_once_with(
         **pinned,
-        host="pg.acme-corp.example",
         port=5432,
         dbname="acme_dwh",
         user="flagsmith",
