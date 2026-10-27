@@ -251,6 +251,11 @@ def test_map_row__event__projects_the_table_columns(
         pytest.param(b'{"event":"e","timestamp":true}', id="bool-timestamp"),
         pytest.param(b'{"event":"e","timestamp":NaN}', id="nan-timestamp"),
         pytest.param(b'{"event":"e","timestamp":1e30}', id="timestamp-out-of-range"),
+        pytest.param(b'{"event":"e","timestamp":1e308}', id="timestamp-overflows"),
+        pytest.param(
+            b'{"event":"e","timestamp":' + b"9" * 400 + b"}",
+            id="timestamp-oversized-int",
+        ),
     ],
 )
 def test_map_row__unusable_event__returns_none(payload: bytes) -> None:

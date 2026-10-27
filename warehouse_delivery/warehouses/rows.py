@@ -1,5 +1,4 @@
 import json
-import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,9 +59,11 @@ def parse_event(payload: bytes) -> EventRow | None:
 def _epoch_millis_to_micros(milliseconds: Any) -> int | None:
     if isinstance(milliseconds, bool) or not isinstance(milliseconds, int | float):
         return None
-    if not math.isfinite(milliseconds):
+    try:
+        micros = int(milliseconds * 1000)
+    except (OverflowError, ValueError):
+        # NaN, infinity, or a float that overflows once scaled.
         return None
-    micros = int(milliseconds * 1000)
     if not MIN_TIMESTAMP_MICROS <= micros <= MAX_TIMESTAMP_MICROS:
         return None
     return micros
