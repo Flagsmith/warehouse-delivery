@@ -5,6 +5,7 @@ from warehouse_delivery.connections import STORED_CONNECTION_FAILURE
 from warehouse_delivery.errors import DeliveryError
 
 INTERNAL_HOST_DETAIL = "The host resolves to an internal address."
+UNRESOLVABLE_DETAIL = "Could not connect to the host."
 
 # RFC 6598 carrier-grade NAT; not caught by is_private.
 _SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
@@ -24,14 +25,15 @@ def checked_address(host: str, port: int) -> str | None:
     else by the time we connect.
 
     Raises ``DeliveryError`` if any address the host resolves to is internal,
-    by the rules the API applies on SaaS. None when blocking is off or the host
-    does not resolve, leaving the driver to report that as usual."""
+    by the rules the API applies on SaaS, or if it does not resolve: letting
+    the driver resolve it again could reach an address never checked. None
+    when blocking is off."""
     if not _block_internal_hosts:
         return None
     try:
         results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return None
+    except socket.gaierror as exc:
+        raise DeliveryError("unreachable", UNRESOLVABLE_DETAIL) from exc
     addresses = [ipaddress.ip_address(str(r[4][0]).split("%")[0]) for r in results]
     if any(_is_internal(address) for address in addresses):
         raise DeliveryError(STORED_CONNECTION_FAILURE, INTERNAL_HOST_DETAIL)

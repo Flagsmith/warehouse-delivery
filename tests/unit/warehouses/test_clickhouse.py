@@ -339,19 +339,37 @@ def test_no_redirect_pool_manager__new_connection__goes_to_the_checked_address(
     )
 
 
-def test_insert__host_resolves_to_an_internal_address__raises_stored_connection(
+@pytest.mark.parametrize(
+    "resolved, kind, detail",
+    [
+        pytest.param(
+            {"return_value": [(socket.AF_INET, 1, 6, "", ("10.0.0.5", 8443))]},
+            "stored_connection",
+            "The host resolves to an internal address.",
+            id="internal-address",
+        ),
+        # Left to the driver, a second lookup could return an unchecked address
+        pytest.param(
+            {"side_effect": socket.gaierror("not known")},
+            "unreachable",
+            "Could not connect to the host.",
+            id="lookup-fails",
+        ),
+    ],
+)
+def test_insert__host_fails_the_address_check__raises_without_connecting(
     mocker: MockerFixture,
+    resolved: dict[str, Any],
+    kind: str,
+    detail: str,
 ) -> None:
-    # Given a host that resolved publicly when the API saved it, but now
-    # resolves to an internal address
+    # Given a host that resolved publicly when the API saved it
     mocker.patch.object(network, "_block_internal_hosts", True)
-    mocker.patch(
-        "warehouse_delivery.network.socket.getaddrinfo",
-        return_value=[(socket.AF_INET, 1, 6, "", ("10.0.0.5", 8443))],
-    )
+    mocker.patch("warehouse_delivery.network.socket.getaddrinfo", **resolved)
+    create_connection = mocker.patch("urllib3.connection.connection.create_connection")
 
     # When / Then
     with pytest.raises(DeliveryError) as excinfo:
         WAREHOUSE.insert(ROWS)
-    assert excinfo.value.kind == "stored_connection"
-    assert excinfo.value.detail == "The host resolves to an internal address."
+    assert (excinfo.value.kind, excinfo.value.detail) == (kind, detail)
+    create_connection.assert_not_called()
