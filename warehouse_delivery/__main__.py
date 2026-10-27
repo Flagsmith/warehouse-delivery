@@ -12,6 +12,7 @@ from confluent_kafka import Consumer, Producer
 from psycopg_pool import ConnectionPool, PoolTimeout
 from structlog_sentry import SentryProcessor
 
+from warehouse_delivery import network
 from warehouse_delivery.config import Config
 from warehouse_delivery.connection_status import PostgresConnectionStatusWriter
 from warehouse_delivery.connections import PostgresWarehouseConnections
@@ -143,6 +144,7 @@ def main() -> None:
     sentry_sdk.init()
     configure_logging()
     config = Config.from_env()
+    network.block_internal_hosts(config.block_internal_warehouse_hosts)
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())

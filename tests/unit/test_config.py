@@ -34,6 +34,7 @@ def test_config_from_env__only_required_set__fills_defaults() -> None:
     assert config.batch_max_wait_seconds == 5.0
     assert config.delivery_concurrency == 16
     assert config.database_pool_size == 4
+    assert config.block_internal_warehouse_hosts is False
 
 
 def test_config_from_env__overrides_set__parses_them() -> None:
@@ -51,6 +52,7 @@ def test_config_from_env__overrides_set__parses_them() -> None:
         "BATCH_MAX_WAIT_MS": "250",
         "DELIVERY_CONCURRENCY": "4",
         "DATABASE_POOL_SIZE": "8",
+        "BLOCK_INTERNAL_WAREHOUSE_HOSTS": "True",
     }
 
     # When
@@ -67,6 +69,7 @@ def test_config_from_env__overrides_set__parses_them() -> None:
     assert config.batch_max_wait_seconds == 0.25
     assert config.delivery_concurrency == 4
     assert config.database_pool_size == 8
+    assert config.block_internal_warehouse_hosts is True
 
 
 @pytest.mark.parametrize(
@@ -120,6 +123,7 @@ def test_config_from_env__auth_none__needs_no_credentials() -> None:
         pytest.param("DELIVERY_CONCURRENCY", "0", id="concurrency-zero"),
         pytest.param("MAX_RETRIES", "0", id="max-retries-zero"),
         pytest.param("DATABASE_POOL_SIZE", "0", id="pool-size-zero"),
+        pytest.param("BLOCK_INTERNAL_WAREHOUSE_HOSTS", "yes", id="boolean"),
         # Longer would outlast the consumer's poll interval while waiting
         pytest.param("RETRY_DELAY_MS", "300001", id="retry-delay-too-long"),
         pytest.param("RETRY_DELAY_MS", "-1", id="retry-delay-negative"),

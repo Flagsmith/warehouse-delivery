@@ -34,6 +34,7 @@ class Config:
     batch_max_wait_seconds: float = 5.0
     delivery_concurrency: int = 16
     database_pool_size: int = 4
+    block_internal_warehouse_hosts: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -81,6 +82,11 @@ class Config:
             database_pool_size=_positive_int(
                 env, "DATABASE_POOL_SIZE", cls.database_pool_size
             ),
+            block_internal_warehouse_hosts=_bool(
+                env,
+                "BLOCK_INTERNAL_WAREHOUSE_HOSTS",
+                cls.block_internal_warehouse_hosts,
+            ),
         )
 
 
@@ -101,6 +107,15 @@ def _int(env: Mapping[str, str], name: str, default: int) -> int:
         raise ConfigError(
             f"Invalid value for {name}: {raw!r} (expected an integer)"
         ) from exc
+
+
+def _bool(env: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = env.get(name)
+    if raw is None:
+        return default
+    if raw.lower() in ("true", "false"):
+        return raw.lower() == "true"
+    raise ConfigError(f"Invalid value for {name}: {raw!r} (expected true or false)")
 
 
 def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:

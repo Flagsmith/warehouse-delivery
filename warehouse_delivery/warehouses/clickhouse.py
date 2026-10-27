@@ -1,4 +1,5 @@
 import gzip
+import socket
 import typing
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -14,7 +15,8 @@ from clickhouse_connect.driver.exceptions import (
     OperationalError,
 )
 from clickhouse_connect.driver.summary import QuerySummary
-from urllib3 import PoolManager
+from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, PoolManager
+from urllib3.connection import HTTPConnection, HTTPSConnection
 
 from warehouse_delivery.connections import (
     INCOMPLETE_DETAIL,
@@ -22,6 +24,7 @@ from warehouse_delivery.connections import (
     WarehouseConnection,
 )
 from warehouse_delivery.errors import DeliveryError
+from warehouse_delivery.network import checked_address
 
 if typing.TYPE_CHECKING:
     from typing import Any
@@ -221,6 +224,40 @@ class _NoRedirectPoolManager(PoolManager):
     ) -> Any:
         kwargs["redirect"] = False
         return super().urlopen(method, url, **kwargs)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.pool_classes_by_scheme = {
+            "http": _CheckedHTTPConnectionPool,
+            "https": _CheckedHTTPSConnectionPool,
+        }
+
+
+class _CheckedConnection(HTTPConnection):
+    """Connects to the address network.checked_address approved, while the
+    hostname stays in use for the Host header, SNI and certificate checks."""
+
+    def _new_conn(self) -> socket.socket:
+        address = checked_address(self._dns_host, self.port)
+        if address is None:
+            return super()._new_conn()
+        host, self._dns_host = self._dns_host, address
+        try:
+            return super()._new_conn()
+        finally:
+            self._dns_host = host
+
+
+class _CheckedHTTPSConnection(_CheckedConnection, HTTPSConnection):
+    pass
+
+
+class _CheckedHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _CheckedConnection
+
+
+class _CheckedHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _CheckedHTTPSConnection
 
 
 @lru_cache(maxsize=1)
