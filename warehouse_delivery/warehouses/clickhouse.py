@@ -17,6 +17,7 @@ from clickhouse_connect.driver.exceptions import (
 from clickhouse_connect.driver.summary import QuerySummary
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, PoolManager
 from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.exceptions import ConnectTimeoutError
 
 from warehouse_delivery.connections import (
     INCOMPLETE_DETAIL,
@@ -24,7 +25,7 @@ from warehouse_delivery.connections import (
     WarehouseConnection,
 )
 from warehouse_delivery.errors import DeliveryError
-from warehouse_delivery.network import checked_address
+from warehouse_delivery.network import checked_addresses
 
 if typing.TYPE_CHECKING:
     from typing import Any
@@ -234,15 +235,23 @@ class _NoRedirectPoolManager(PoolManager):
 
 
 class _CheckedConnection(HTTPConnection):
-    """Connects to the address network.checked_address approved, while the
-    hostname stays in use for the Host header, SNI and certificate checks."""
+    """Connects to the first reachable address network.checked_addresses
+    approved, while the hostname stays in use for the Host header, SNI and
+    certificate checks."""
 
     def _new_conn(self) -> socket.socket:
-        address = checked_address(self._dns_host, self.port)
-        if address is None:
+        addresses = checked_addresses(self._dns_host, self.port)
+        if addresses is None:
             return super()._new_conn()
-        host, self._dns_host = self._dns_host, address
+        host = self._dns_host
         try:
+            for address in addresses[:-1]:
+                self._dns_host = address
+                try:
+                    return super()._new_conn()
+                except ConnectTimeoutError:
+                    continue
+            self._dns_host = addresses[-1]
             return super()._new_conn()
         finally:
             self._dns_host = host

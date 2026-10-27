@@ -308,20 +308,24 @@ def http_server() -> Iterator[tuple[int, list[str]]]:
 @pytest.mark.parametrize(
     "host, checked",
     [
-        pytest.param("ch.acme-corp.example", "127.0.0.1", id="checked-address"),
+        pytest.param("ch.acme-corp.example", ["127.0.0.1"], id="checked-address"),
+        # Nothing listens on ::1, as on a dual-stack host whose IPv6 is down
+        pytest.param(
+            "ch.acme-corp.example", ["::1", "127.0.0.1"], id="falls-back-in-order"
+        ),
         pytest.param("127.0.0.1", None, id="blocking-off"),
     ],
 )
-def test_no_redirect_pool_manager__new_connection__goes_to_the_checked_address(
+def test_no_redirect_pool_manager__new_connection__goes_to_a_checked_address(
     mocker: MockerFixture,
     http_server: tuple[int, list[str]],
     host: str,
-    checked: str | None,
+    checked: list[str] | None,
 ) -> None:
     # Given
     port, hosts = http_server
-    checked_address = mocker.patch(
-        "warehouse_delivery.warehouses.clickhouse.checked_address",
+    checked_addresses = mocker.patch(
+        "warehouse_delivery.warehouses.clickhouse.checked_addresses",
         return_value=checked,
     )
     manager = clickhouse._NoRedirectPoolManager()
@@ -329,9 +333,9 @@ def test_no_redirect_pool_manager__new_connection__goes_to_the_checked_address(
     # When
     response = manager.request("GET", f"http://{host}:{port}/")
 
-    # Then the socket goes to the checked address, the request keeps the name
+    # Then the socket goes to a checked address, the request keeps the name
     assert response.status == 200
-    checked_address.assert_called_once_with(host, port)
+    checked_addresses.assert_called_once_with(host, port)
     assert hosts == [f"{host}:{port}"]
     assert (
         manager.pool_classes_by_scheme["https"]

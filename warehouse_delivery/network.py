@@ -19,10 +19,10 @@ def block_internal_hosts(enabled: bool) -> None:
     _block_internal_hosts = enabled
 
 
-def checked_address(host: str, port: int) -> str | None:
-    """The address to connect to in place of the host when internal hosts are
-    blocked, so a name the API checked at save time cannot resolve somewhere
-    else by the time we connect.
+def checked_addresses(host: str, port: int) -> list[str] | None:
+    """The addresses to try, in order, in place of the host when internal
+    hosts are blocked, so a name the API checked at save time cannot resolve
+    somewhere else by the time we connect.
 
     Raises ``DeliveryError`` if any address the host resolves to is internal,
     by the rules the API applies on SaaS, or if it does not resolve: letting
@@ -37,7 +37,7 @@ def checked_address(host: str, port: int) -> str | None:
     addresses = [ipaddress.ip_address(str(r[4][0]).split("%")[0]) for r in results]
     if any(_is_internal(address) for address in addresses):
         raise DeliveryError(STORED_CONNECTION_FAILURE, INTERNAL_HOST_DETAIL)
-    return str(addresses[0])
+    return list(dict.fromkeys(str(address) for address in addresses))
 
 
 def _is_internal(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
