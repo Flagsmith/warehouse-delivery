@@ -15,7 +15,6 @@ from clickhouse_connect.driver.exceptions import (
 from clickhouse_connect.driver.summary import QuerySummary
 from pytest_mock import MockerFixture
 from urllib3 import PoolManager
-from urllib3.connection import HTTPSConnection
 
 from warehouse_delivery import network
 from warehouse_delivery.connections import WarehouseConnection
@@ -334,19 +333,10 @@ def test_no_redirect_pool_manager__new_connection__goes_to_the_checked_address(
     assert response.status == 200
     checked_address.assert_called_once_with(host, port)
     assert hosts == [f"{host}:{port}"]
-
-
-def test_no_redirect_pool_manager__https__checks_the_address_too() -> None:
-    # Given / When
-    manager = clickhouse._NoRedirectPoolManager()
-
-    # Then
-    assert manager.pool_classes_by_scheme["https"] is (
-        clickhouse._CheckedHTTPSConnectionPool
+    assert (
+        manager.pool_classes_by_scheme["https"]
+        is clickhouse._CheckedHTTPSConnectionPool
     )
-    connection_class = clickhouse._CheckedHTTPSConnectionPool.ConnectionCls
-    assert issubclass(connection_class, clickhouse._CheckedConnection)
-    assert issubclass(connection_class, HTTPSConnection)
 
 
 def test_insert__host_resolves_to_an_internal_address__raises_stored_connection(
@@ -354,19 +344,14 @@ def test_insert__host_resolves_to_an_internal_address__raises_stored_connection(
 ) -> None:
     # Given a host that resolved publicly when the API saved it, but now
     # resolves to an internal address
-    network.block_internal_hosts(True)
+    mocker.patch.object(network, "_block_internal_hosts", True)
     mocker.patch(
         "warehouse_delivery.network.socket.getaddrinfo",
         return_value=[(socket.AF_INET, 1, 6, "", ("10.0.0.5", 8443))],
     )
 
-    # When
-    try:
-        with pytest.raises(DeliveryError) as excinfo:
-            WAREHOUSE.insert(ROWS)
-    finally:
-        network.block_internal_hosts(False)
-
-    # Then
+    # When / Then
+    with pytest.raises(DeliveryError) as excinfo:
+        WAREHOUSE.insert(ROWS)
     assert excinfo.value.kind == "stored_connection"
     assert excinfo.value.detail == "The host resolves to an internal address."

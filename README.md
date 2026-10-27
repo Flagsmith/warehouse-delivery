@@ -34,7 +34,7 @@ make run
 | `BATCH_MAX_RECORDS` | `5000` | Records per consumed batch |
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
-| `BLOCK_INTERNAL_WAREHOUSE_HOSTS` | `false` | `true` refuses warehouses whose host resolves to a loopback, private, link-local, reserved or shared address, and connects to the checked address. Set it on SaaS; self-hosted leaves it off to reach hosts such as `clickhouse:8123` |
+| `BLOCK_INTERNAL_WAREHOUSE_HOSTS` | `false` | `true` refuses warehouse hosts that resolve to internal addresses and connects to the checked address. Set on SaaS |
 | `SENTRY_DSN` | unset | Where error logs and crashes are reported; unset turns Sentry off |
 | `SENTRY_ENVIRONMENT` | `production` | Environment the Sentry events are tagged with |
 
