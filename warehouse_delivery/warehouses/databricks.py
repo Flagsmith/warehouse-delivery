@@ -1,13 +1,11 @@
 import hashlib
 import json
-import math
 import re
 import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any
 from urllib.parse import urlencode
 
 import structlog
@@ -29,6 +27,7 @@ from warehouse_delivery.connections import (
     WarehouseConnection,
 )
 from warehouse_delivery.errors import DeliveryError
+from warehouse_delivery.warehouses.rows import parse_event
 
 logger = structlog.get_logger("warehouse")
 
@@ -51,20 +50,6 @@ SDK_SHUTDOWN_MS = 1_100
 
 # Zerobus rejects an ingest call over 10,420,224 bytes, framing included.
 MAX_PAYLOAD_BYTES = 9 * 1024 * 1024
-
-# Range of a Delta TIMESTAMP, 0001-01-01 to 9999-12-31, in microseconds.
-MIN_TIMESTAMP_MICROS = -62_135_596_800_000_000
-MAX_TIMESTAMP_MICROS = 253_402_300_799_999_999
-
-NOT_NULL_COLUMNS = ("environment_key", "event", "identifier")
-NULLABLE_COLUMNS = (
-    "feature_name",
-    "value",
-    "traits",
-    "metadata",
-    "sdk_language",
-    "sdk_version",
-)
 
 SCHEMA_MISMATCH_DETAIL = (
     "The warehouse rejected the events. Check that the events table "
@@ -236,27 +221,15 @@ class DatabricksWarehouse:
 def map_row(payload: bytes) -> str | None:
     """Returns None for an event that cannot be made valid, since one invalid
     record fails the whole stream."""
-    try:
-        event = json.loads(payload)
-    except ValueError:
+    row = parse_event(payload)
+    if row is None:
         return None
-    if not isinstance(event, dict):
-        return None
-    timestamp = _epoch_millis_to_micros(event.get("timestamp"))
-    collected_at = _epoch_millis_to_micros(event.get("collected_at"))
-    if timestamp is None:
-        timestamp = collected_at
-    if timestamp is None:
-        return None
-    record: dict[str, str | int] = {
-        column: _as_column_text(event.get(column)) or "" for column in NOT_NULL_COLUMNS
-    }
-    record["timestamp"] = timestamp
-    if collected_at is not None:
-        record["collected_at"] = collected_at
-    for column in NULLABLE_COLUMNS:
-        if (text := _as_column_text(event.get(column))) is not None:
-            record[column] = text
+    record: dict[str, str | int] = {**row.not_null, "timestamp": row.timestamp}
+    if row.collected_at is not None:
+        record["collected_at"] = row.collected_at
+    for column, value in row.nullable.items():
+        if value is not None:
+            record[column] = value
     text = json.dumps(record, separators=(",", ":"))
     # json.dumps escapes non-ASCII, so the length is the size in bytes.
     return text if len(text) <= MAX_PAYLOAD_BYTES else None
@@ -273,23 +246,6 @@ def _chunks(records: list[str]) -> Iterator[list[str]]:
         size += len(record)
     if chunk:
         yield chunk
-
-
-def _epoch_millis_to_micros(milliseconds: Any) -> int | None:
-    if isinstance(milliseconds, bool) or not isinstance(milliseconds, int | float):
-        return None
-    if not math.isfinite(milliseconds):
-        return None
-    micros = int(milliseconds * 1000)
-    if not MIN_TIMESTAMP_MICROS <= micros <= MAX_TIMESTAMP_MICROS:
-        return None
-    return micros
-
-
-def _as_column_text(value: Any) -> str | None:
-    if value is None or isinstance(value, str):
-        return value
-    return json.dumps(value, separators=(",", ":"))
 
 
 def _stream_options() -> StreamConfigurationOptions:
