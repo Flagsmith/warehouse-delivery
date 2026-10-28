@@ -58,7 +58,7 @@ EXPOSURE = {
     "sdk_language": "python",
     "sdk_version": "5.0.0",
 }
-SENTENCES = {
+DETAIL_BY_KIND = {
     "authentication": "Authentication failed.",
     "missing_database": "Database does not exist.",
     "unreachable": "Could not connect to the host.",
@@ -76,7 +76,7 @@ READ_ONLY = "RAISE EXCEPTION 'read only' USING ERRCODE = '25006';"
 SLOW = "PERFORM pg_sleep(1); RETURN NEW;"
 
 
-def _connection(details: dict[str, Any]) -> WarehouseConnection:
+def _warehouse_connection(details: dict[str, Any]) -> WarehouseConnection:
     config = {k: v for k, v in details.items() if v is not MISSING}
     password = config.pop("password", MISSING)
     credentials = {} if password is MISSING else {"password": password}
@@ -85,7 +85,7 @@ def _connection(details: dict[str, Any]) -> WarehouseConnection:
     )
 
 
-def _payload(event: dict[str, Any]) -> bytes:
+def _event_payload(event: dict[str, Any]) -> bytes:
     return json.dumps({k: v for k, v in event.items() if v is not MISSING}).encode()
 
 
@@ -99,7 +99,7 @@ def _admin_execute(database_url: str, statement: str, schema: str) -> None:
         )
 
 
-def _trigger(body: str) -> str:
+def _before_insert_trigger_sql(body: str) -> str:
     return (
         "CREATE FUNCTION {schema}.on_insert() RETURNS trigger LANGUAGE plpgsql "
         f"AS $$ BEGIN {body} END $$; CREATE TRIGGER on_insert BEFORE INSERT "
@@ -107,7 +107,7 @@ def _trigger(body: str) -> str:
     )
 
 
-def _events(database_url: str, schema: str) -> list[dict[str, Any]]:
+def _stored_events(database_url: str, schema: str) -> list[dict[str, Any]]:
     with psycopg.connect(database_url) as database:
         cursor = database.cursor(row_factory=psycopg.rows.dict_row)
         return cursor.execute(
@@ -126,7 +126,7 @@ def events_schema(database_url: str) -> Iterator[str]:
 
 
 @pytest.fixture()
-def target(database_url: str, events_schema: str) -> dict[str, Any]:
+def database_details(database_url: str, events_schema: str) -> dict[str, Any]:
     """Details of the test database's events schema."""
     server: dict[str, Any] = conninfo_to_dict(database_url)
     return {
@@ -141,8 +141,8 @@ def target(database_url: str, events_schema: str) -> dict[str, Any]:
 
 
 @pytest.fixture()
-def warehouse(target: dict[str, Any]) -> PostgresWarehouse:
-    return PostgresWarehouse.from_connection(_connection(target))
+def warehouse(database_details: dict[str, Any]) -> PostgresWarehouse:
+    return PostgresWarehouse.from_connection(_warehouse_connection(database_details))
 
 
 @pytest.mark.parametrize(
@@ -160,7 +160,9 @@ def test_from_connection__valid_details__builds_the_warehouse(
     overrides: dict[str, Any],
 ) -> None:
     # Given / When
-    warehouse = PostgresWarehouse.from_connection(_connection({**DETAILS, **overrides}))
+    warehouse = PostgresWarehouse.from_connection(
+        _warehouse_connection({**DETAILS, **overrides})
+    )
 
     # Then
     assert warehouse == dataclasses.replace(WAREHOUSE, **overrides)
@@ -193,7 +195,7 @@ def test_from_connection__invalid_details__raises_stored_connection_failure(
     overrides: dict[str, Any],
 ) -> None:
     # Given
-    connection = _connection({**DETAILS, **overrides})
+    connection = _warehouse_connection({**DETAILS, **overrides})
 
     # When / Then
     with pytest.raises(DeliveryError) as excinfo:
@@ -212,14 +214,14 @@ def test_timeouts__worst_case__fits_inside_the_insert_timeout() -> None:
     assert worst_case_ms < INSERT_TIMEOUT_SECONDS * 1000
 
 
-def test_insert__connect__passes_the_stored_details_and_timeouts(
+def test_insert__connecting__passes_the_stored_details_timeouts_and_utf8(
     mocker: MockerFixture,
 ) -> None:
     # Given
     connect = mocker.patch("warehouse_delivery.warehouses.postgres.psycopg.connect")
 
     # When
-    WAREHOUSE.insert([_payload(EXPOSURE)])
+    WAREHOUSE.insert([_event_payload(EXPOSURE)])
 
     # Then
     connect.assert_called_once_with(
@@ -230,6 +232,7 @@ def test_insert__connect__passes_the_stored_details_and_timeouts(
         password="hunter2",
         sslmode="require",
         application_name="flagsmith-warehouse-delivery",
+        client_encoding="UTF8",
         connect_timeout=10,
         tcp_user_timeout=30_000,
         keepalives_idle=10,
@@ -258,7 +261,7 @@ def test_insert__connection_string_unbuildable__raises_stored_connection_failure
 
     # When / Then
     with pytest.raises(DeliveryError) as excinfo:
-        WAREHOUSE.insert([_payload(EXPOSURE)])
+        WAREHOUSE.insert([_event_payload(EXPOSURE)])
     assert excinfo.value.kind == "stored_connection"
     assert excinfo.value.__cause__ is None
 
@@ -270,11 +273,11 @@ def test_insert__events__copies_every_column_and_skips_unusable_rows(
     log: StructuredLogCapture,
 ) -> None:
     # Given / When
-    written = warehouse.insert([_payload(EXPOSURE), b"{not json", b'["a list"]'])
+    written = warehouse.insert([_event_payload(EXPOSURE), b"{not json", b'["a list"]'])
 
     # Then
     assert written == 1
-    assert _events(database_url, events_schema) == [
+    assert _stored_events(database_url, events_schema) == [
         {
             "environment_key": "env",
             "event": "$flag_exposure",
@@ -327,10 +330,10 @@ def test_insert__event_field__stored_as_text(
     expected: str | None,
 ) -> None:
     # Given / When
-    warehouse.insert([_payload({**EXPOSURE, **overrides})])
+    warehouse.insert([_event_payload({**EXPOSURE, **overrides})])
 
     # Then
-    (row,) = _events(database_url, events_schema)
+    (row,) = _stored_events(database_url, events_schema)
     assert row[column] == expected
 
 
@@ -340,15 +343,27 @@ def test_insert__event_field__stored_as_text(
         pytest.param(None, {"password": "wrong"}, "authentication", id="password"),
         pytest.param(None, {"database": "nope"}, "missing_database", id="database"),
         pytest.param(None, {"host": "127.0.0.1", "port": 1}, "unreachable", id="port"),
-        pytest.param(_trigger(END_SESSION), {}, "unreachable", id="lost-mid-copy"),
+        pytest.param(
+            _before_insert_trigger_sql(END_SESSION),
+            {},
+            "unreachable",
+            id="lost-mid-copy",
+        ),
         pytest.param("DROP TABLE {table}", {}, "missing_table", id="no-table"),
         pytest.param("DROP SCHEMA {schema} CASCADE", {}, "missing_table", id="schema"),
-        pytest.param(_trigger(READ_ONLY), {}, "rejected", id="other-server-error"),
-        pytest.param(_trigger(SLOW), {}, "timeout", id="statement-timeout"),
+        pytest.param(
+            _before_insert_trigger_sql(READ_ONLY),
+            {},
+            "rejected",
+            id="other-server-error",
+        ),
+        pytest.param(
+            _before_insert_trigger_sql(SLOW), {}, "timeout", id="statement-timeout"
+        ),
     ],
 )
-def test_insert__server_or_connection_fails__raises_its_delivery_error(
-    target: dict[str, Any],
+def test_insert__server_or_connection_fails__raises_its_delivery_error_without_the_rows(
+    database_details: dict[str, Any],
     database_url: str,
     events_schema: str,
     mocker: MockerFixture,
@@ -360,12 +375,17 @@ def test_insert__server_or_connection_fails__raises_its_delivery_error(
     mocker.patch("warehouse_delivery.warehouses.postgres.STATEMENT_TIMEOUT_MS", 100)
     if statement is not None:
         _admin_execute(database_url, statement, events_schema)
-    warehouse = PostgresWarehouse.from_connection(_connection({**target, **overrides}))
+    warehouse = PostgresWarehouse.from_connection(
+        _warehouse_connection({**database_details, **overrides})
+    )
 
     # When / Then
     with pytest.raises(DeliveryError) as excinfo:
-        warehouse.insert([_payload(EXPOSURE)])
-    assert (excinfo.value.kind, excinfo.value.detail) == (kind, SENTENCES[kind])
+        warehouse.insert([_event_payload(EXPOSURE)])
+    assert (excinfo.value.kind, excinfo.value.detail) == (kind, DETAIL_BY_KIND[kind])
+    # And once rows are sent, the error that quotes them is not chained
+    if statement is not None:
+        assert excinfo.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
@@ -401,12 +421,12 @@ def test_insert__table_does_not_match__raises_schema_mismatch_without_the_rows(
 
     # When
     with pytest.raises(DeliveryError) as excinfo:
-        warehouse.insert([_payload(purchase), _payload(EXPOSURE)])
+        warehouse.insert([_event_payload(purchase), _event_payload(EXPOSURE)])
 
     # Then nothing is written, and the end users' data Postgres quotes in its
     # error reaches neither the exception chain nor the logs
     assert excinfo.value.kind == "schema_mismatch"
-    assert excinfo.value.detail == SENTENCES["schema_mismatch"]
+    assert excinfo.value.detail == DETAIL_BY_KIND["schema_mismatch"]
     assert excinfo.value.__cause__ is None
     assert excinfo.value.__suppress_context__
     assert log.events == [
@@ -419,11 +439,11 @@ def test_insert__table_does_not_match__raises_schema_mismatch_without_the_rows(
             "error__column": None,
         }
     ]
-    assert _events(database_url, events_schema) == []
+    assert _stored_events(database_url, events_schema) == []
 
 
 def test_insert__user_without_insert__raises_permission_denied(
-    target: dict[str, Any],
+    database_details: dict[str, Any],
     database_url: str,
     events_schema: str,
 ) -> None:
@@ -436,13 +456,13 @@ def test_insert__user_without_insert__raises_permission_denied(
         events_schema,
     )
     warehouse = PostgresWarehouse.from_connection(
-        _connection({**target, "username": role, "password": "x"})
+        _warehouse_connection({**database_details, "username": role, "password": "x"})
     )
 
     # When
     try:
         with pytest.raises(DeliveryError) as excinfo:
-            warehouse.insert([_payload(EXPOSURE)])
+            warehouse.insert([_event_payload(EXPOSURE)])
     finally:
         _admin_execute(
             database_url, f"DROP OWNED BY {role}; DROP ROLE {role}", events_schema
@@ -450,4 +470,4 @@ def test_insert__user_without_insert__raises_permission_denied(
 
     # Then
     assert excinfo.value.kind == "permission_denied"
-    assert excinfo.value.detail == SENTENCES["permission_denied"]
+    assert excinfo.value.detail == DETAIL_BY_KIND["permission_denied"]
