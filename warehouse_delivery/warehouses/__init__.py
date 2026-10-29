@@ -4,6 +4,7 @@ from typing import Protocol
 from warehouse_delivery.connections import WarehouseConnection
 from warehouse_delivery.warehouses.clickhouse import ClickHouseWarehouse
 from warehouse_delivery.warehouses.databricks import DatabricksWarehouse
+from warehouse_delivery.warehouses.postgres import PostgresWarehouse
 
 
 class Warehouse(Protocol):
@@ -19,6 +20,7 @@ class Warehouse(Protocol):
 _ADAPTERS: dict[str, Callable[[WarehouseConnection], Warehouse]] = {
     "clickhouse": ClickHouseWarehouse.from_connection,
     "databricks": DatabricksWarehouse.from_connection,
+    "postgres": PostgresWarehouse.from_connection,
 }
 
 

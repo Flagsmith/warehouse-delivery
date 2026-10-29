@@ -33,6 +33,7 @@ class Config:
     batch_max_records: int = 5000
     batch_max_wait_seconds: float = 5.0
     delivery_concurrency: int = 16
+    database_pool_size: int = 4
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
@@ -76,6 +77,9 @@ class Config:
             batch_max_wait_seconds=_int(env, "BATCH_MAX_WAIT_MS", 5000) / 1000,
             delivery_concurrency=_positive_int(
                 env, "DELIVERY_CONCURRENCY", cls.delivery_concurrency
+            ),
+            database_pool_size=_positive_int(
+                env, "DATABASE_POOL_SIZE", cls.database_pool_size
             ),
         )
 

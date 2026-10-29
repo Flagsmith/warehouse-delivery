@@ -2,6 +2,7 @@ from warehouse_delivery.connections import WarehouseConnection
 from warehouse_delivery.warehouses import warehouse_for
 from warehouse_delivery.warehouses.clickhouse import ClickHouseWarehouse
 from warehouse_delivery.warehouses.databricks import DatabricksWarehouse
+from warehouse_delivery.warehouses.postgres import PostgresWarehouse
 
 CONFIG = {
     "host": "ch.acme-corp.example",
@@ -64,6 +65,38 @@ def test_warehouse_for__databricks_connection__builds_the_databricks_adapter() -
         schema="flagsmith",
         client_id="sp-id",
         client_secret="sp-secret",
+    )
+
+
+def test_warehouse_for__postgres_connection__builds_the_postgres_adapter() -> None:
+    # Given
+    connection = WarehouseConnection(
+        id=11,
+        warehouse_type="postgres",
+        config={
+            "host": "pg.acme-corp.example",
+            "port": 5432,
+            "database": "acme_dwh",
+            "schema": "flagsmith_exp",
+            "username": "flagsmith",
+            "sslmode": "require",
+        },
+        credentials={"password": "hunter2"},
+    )
+
+    # When
+    warehouse = warehouse_for(connection)
+
+    # Then
+    assert warehouse == PostgresWarehouse(
+        connection_id=11,
+        host="pg.acme-corp.example",
+        port=5432,
+        database="acme_dwh",
+        schema="flagsmith_exp",
+        username="flagsmith",
+        password="hunter2",
+        sslmode="require",
     )
 
 

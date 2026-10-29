@@ -23,7 +23,6 @@ from warehouse_delivery.retries import KafkaRetryWriter
 
 logger = structlog.get_logger("warehouse")
 
-DATABASE_POOL_SIZE = 4
 DATABASE_CONNECT_TIMEOUT_SECONDS = 5.0
 
 # Each loop touches its own file here on every pass; the Kubernetes liveness
@@ -54,7 +53,7 @@ def build_database_pool(config: Config) -> ConnectionPool:
     pool = ConnectionPool(
         config.database_url,
         min_size=1,
-        max_size=DATABASE_POOL_SIZE,
+        max_size=config.database_pool_size,
         timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
         # The server closes connections idle past its idle_session_timeout;
         # without a check the pool hands them out dead.

@@ -34,8 +34,13 @@ make run
 | `BATCH_MAX_RECORDS` | `5000` | Records per consumed batch |
 | `BATCH_MAX_WAIT_MS` | `5000` | Longest wait for a batch to fill |
 | `DELIVERY_CONCURRENCY` | `16` | Customers inserted at the same time within a batch |
+| `DATABASE_POOL_SIZE` | `4` | Connections to Flagsmith's Postgres, shared by both loops |
 | `SENTRY_DSN` | unset | Where error logs and crashes are reported; unset turns Sentry off |
 | `SENTRY_ENVIRONMENT` | `production` | Environment the Sentry events are tagged with |
+
+## PostgreSQL warehouses
+
+Each insert into a customer's PostgreSQL opens its own connection, with the stored `sslmode` (`require`, or `disable` on self-hosted), and writes the batch with one `COPY` into `<schema>.events`. The customer's user needs `USAGE` on the schema and `SELECT, INSERT` on the table.
 
 ## Kafka topics
 
