@@ -20,7 +20,7 @@
             "environment": [
                 {
                     "name": "KAFKA_BOOTSTRAP_SERVERS",
-                    "value": "b-1.eventsingestionkafka.gk39xl.c4.kafka.eu-west-2.amazonaws.com:9096,b-2.eventsingestionkafka.gk39xl.c4.kafka.eu-west-2.amazonaws.com:9096,b-3.eventsingestionkafka.gk39xl.c4.kafka.eu-west-2.amazonaws.com:9096"
+                    "value": "b-1.eventsingestionkafka.pt3xr9.c4.kafka.eu-west-2.amazonaws.com:9096,b-2.eventsingestionkafka.pt3xr9.c4.kafka.eu-west-2.amazonaws.com:9096,b-3.eventsingestionkafka.pt3xr9.c4.kafka.eu-west-2.amazonaws.com:9096"
                 },
                 {
                     "name": "SENTRY_ENVIRONMENT",
