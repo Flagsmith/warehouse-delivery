@@ -42,6 +42,10 @@ make run
 
 Each insert into a customer's PostgreSQL opens its own connection, with the stored `sslmode` (`require`, or `disable` on self-hosted), and writes the batch with one `COPY` into `<schema>.events`. The customer's user needs `USAGE` on the schema and `SELECT, INSERT` on the table.
 
+## Snowflake warehouses
+
+Each insert appends the batch to `<DATABASE>.<SCHEMA>.EVENTS` through the Snowpipe Streaming REST API, with no warehouse running. The service signs a key-pair JWT for the stored user with their private key, looks up the account's ingest host, and exchanges the JWT for a token scoped to that host; both are cached, the token until shortly before its hour is up. Timestamps are sent as UTC, since `TIMESTAMP_NTZ` ignores the offset. A row Snowflake cannot store is dropped without an error, so rows are checked before sending. The user's default role needs `USAGE` on the database and schema and `SELECT, INSERT` on the table.
+
 ## Kafka topics
 
 The service does not create topics. Before starting it, create the retry topic (`EXTERNAL_WAREHOUSE_RETRY_TOPIC`) with the same partition count as the events topic, and give the Kafka user read and write access to it and access to the `KAFKA_RETRY_CONSUMER_GROUP` consumer group. If the topic is missing, the first failed delivery stops the service without committing the batch.

@@ -5,6 +5,7 @@ from warehouse_delivery.connections import WarehouseConnection
 from warehouse_delivery.warehouses.clickhouse import ClickHouseWarehouse
 from warehouse_delivery.warehouses.databricks import DatabricksWarehouse
 from warehouse_delivery.warehouses.postgres import PostgresWarehouse
+from warehouse_delivery.warehouses.snowflake import SnowflakeWarehouse
 
 
 class Warehouse(Protocol):
@@ -21,11 +22,12 @@ _ADAPTERS: dict[str, Callable[[WarehouseConnection], Warehouse]] = {
     "clickhouse": ClickHouseWarehouse.from_connection,
     "databricks": DatabricksWarehouse.from_connection,
     "postgres": PostgresWarehouse.from_connection,
+    "snowflake": SnowflakeWarehouse.from_connection,
 }
 
 
 def warehouse_for(connection: WarehouseConnection) -> Warehouse | None:
     """Picks the code that knows how to insert into this connection's kind of
-    warehouse. Returns None for kinds not supported yet, such as Snowflake."""
+    warehouse. Returns None for kinds not supported yet."""
     adapter = _ADAPTERS.get(connection.warehouse_type)
     return adapter(connection) if adapter is not None else None
