@@ -44,14 +44,12 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 # Their sum must stay under clickhouse.INSERT_TIMEOUT_SECONDS.
 HOSTNAME_TIMEOUT_SECONDS = 10
 TOKEN_TIMEOUT_SECONDS = 10
-# Shared by every chunk of one insert.
 APPEND_TIMEOUT_SECONDS = 30
 
 # Snowpipe Streaming rejects a request over 4 MB.
 MAX_PAYLOAD_BYTES = 3 * 1024 * 1024
 
 JWT_LIFETIME_SECONDS = 300
-# Snowflake answers with the bare token and no expiry; tokens last an hour.
 SCOPED_TOKEN_LIFETIME_SECONDS = 3600
 TOKEN_REFRESH_MARGIN_SECONDS = 300
 
@@ -65,7 +63,6 @@ PERMISSION_DENIED_DETAIL = "Permission denied on the events table."
 TIMEOUT_DETAIL = "The query timed out."
 REJECTED_DETAIL = "The Snowflake account rejected the request."
 
-# Snowflake does not tell a missing object from one the role cannot see.
 MISSING_DATABASE_CODE = "ERR_DATABASE_DOES_NOT_EXIST_OR_NOT_AUTHORIZED"
 MISSING_TABLE_CODES = frozenset(
     {
@@ -202,7 +199,6 @@ def map_row(payload: bytes) -> str | None:
 
 
 def _epoch_micros_to_iso8601(micros: int) -> str:
-    # TIMESTAMP_NTZ ignores the offset, so it must be UTC.
     moment = _EPOCH + timedelta(microseconds=micros)
     return moment.isoformat(timespec="microseconds")
 
@@ -226,7 +222,6 @@ def _load_private_key(pem: str) -> RSAPrivateKey:
     try:
         private_key = serialization.load_pem_private_key(pem.encode(), password=None)
     except (ValueError, TypeError):
-        # Raised from None so no part of the key reaches the logs.
         raise DeliveryError(STORED_CONNECTION_FAILURE, INCOMPLETE_DETAIL) from None
     if not isinstance(private_key, RSAPrivateKey):
         raise DeliveryError(STORED_CONNECTION_FAILURE, INCOMPLETE_DETAIL)
@@ -266,7 +261,6 @@ def _keypair_headers(warehouse: SnowflakeWarehouse) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {_keypair_jwt(warehouse)}",
         "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
-        # Snowflake answers a request without one with HTTP 400.
         "Accept": "application/json",
         "User-Agent": APPLICATION_NAME,
     }
@@ -292,7 +286,6 @@ def _get_ingest_host(warehouse: SnowflakeWarehouse) -> str:
     ingest_host = (
         response.data.decode(errors="replace").strip().lower().replace("_", "-")
     )
-    # The scoped token is sent to this host, so it must be Snowflake's.
     if not (
         _HOSTNAME.fullmatch(ingest_host) and ingest_host.endswith(f".{HOST_SUFFIX}")
     ):
@@ -396,7 +389,6 @@ def _refused(
         return DeliveryError("missing_database", MISSING_DATABASE_DETAIL)
     if snowflake_code in MISSING_TABLE_CODES:
         return DeliveryError("missing_table", MISSING_TABLE_DETAIL)
-    # An unknown account's host answers every path with an HTML 404.
     if response.status == 404:
         return DeliveryError("unreachable", UNREACHABLE_DETAIL)
     return _rejected()
