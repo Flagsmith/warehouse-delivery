@@ -37,7 +37,7 @@ _ACCOUNT_IDENTIFIER = re.compile(r"[A-Za-z0-9]+-[A-Za-z0-9_-]+")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _LABEL = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?"
 _HOSTNAME = re.compile(rf"{_LABEL}(\.{_LABEL})+")
-_TOKEN = re.compile(r"[A-Za-z0-9._-]+")
+_SCOPED_TOKEN = re.compile(r"[A-Za-z0-9._-]+")
 _SNOWFLAKE_CODE = re.compile(r"[A-Za-z0-9_]+")
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -139,28 +139,34 @@ class SnowflakeWarehouse:
     def _append(
         self, ingest_host: str, token: str, chunk: list[str], deadline: float
     ) -> None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
             raise DeliveryError("timeout", TIMEOUT_DETAIL)
         query = urlencode({"requestId": str(uuid4()), "retryCount": 0})
-        response = _request(
-            "POST",
-            f"https://{ingest_host}{self.rows_path}?{query}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/x-ndjson",
-                "Accept": "application/json",
-                "User-Agent": APPLICATION_NAME,
-            },
-            body="".join(chunk).encode(),
-            timeout=remaining,
-        )
-        if response.status == 200:
-            return
-        if response.status == 401:
-            with _tokens_lock:
-                _tokens.pop(_token_key(self, ingest_host), None)
-        raise _refused(self, "append.refused", response)
+        try:
+            response = _request(
+                "POST",
+                f"https://{ingest_host}{self.rows_path}?{query}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/x-ndjson",
+                    "Accept": "application/json",
+                    "User-Agent": APPLICATION_NAME,
+                },
+                body="".join(chunk).encode(),
+                timeout=remaining_seconds,
+            )
+            if response.status == 200:
+                return
+            if response.status == 401:
+                with _tokens_lock:
+                    _tokens.pop(_token_key(self, ingest_host), None)
+            raise _refused(self, "append.refused", response)
+        except DeliveryError as error:
+            if error.kind == "unreachable":
+                with _ingest_hosts_lock:
+                    _ingest_hosts.pop(self.account_host, None)
+            raise
 
     def _is_valid(self) -> bool:
         return (
@@ -183,7 +189,7 @@ class SnowflakeWarehouse:
 
 def map_row(payload: bytes) -> str | None:
     """Returns the event as one NDJSON line, or None for an event that cannot
-    be made valid, since Snowflake silently drops a row it cannot store."""
+    be made valid, which Snowflake would not accept."""
     row = parse_event(payload)
     if row is None:
         return None
@@ -342,7 +348,7 @@ def _exchange_token(warehouse: SnowflakeWarehouse, ingest_host: str) -> str:
     if response.status != 200:
         raise _refused(warehouse, "token.refused", response)
     token = response.data.decode(errors="replace").strip()
-    if not _TOKEN.fullmatch(token):
+    if not _SCOPED_TOKEN.fullmatch(token):
         raise _rejected()
     return token
 
@@ -372,11 +378,11 @@ def _request(
 
 
 def _refused(
-    warehouse: SnowflakeWarehouse, event: str, response: BaseHTTPResponse
+    warehouse: SnowflakeWarehouse, log_event: str, response: BaseHTTPResponse
 ) -> DeliveryError:
     snowflake_code = _snowflake_code(response.data)
     logger.warning(
-        event,
+        log_event,
         connection__id=warehouse.connection_id,
         http__status=response.status,
         snowflake__code=snowflake_code,

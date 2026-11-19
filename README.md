@@ -44,7 +44,7 @@ Each insert into a customer's PostgreSQL opens its own connection, with the stor
 
 ## Snowflake warehouses
 
-Each insert appends the batch to `<DATABASE>.<SCHEMA>.EVENTS` through the Snowpipe Streaming REST API, with no warehouse running. The service signs a key-pair JWT for the stored user with their private key, looks up the account's ingest host, and exchanges the JWT for a token scoped to that host; both are cached, the token until shortly before its hour is up. The user's default role needs `USAGE` on the database and schema and `SELECT, INSERT` on the table.
+Each insert appends the batch to `<DATABASE>.<SCHEMA>.EVENTS` through the Snowpipe Streaming REST API, with no warehouse running. The service signs a key-pair JWT for the stored user with their private key, looks up the account's ingest host, and exchanges the JWT for a token scoped to that host; both are cached, the token until shortly before its hour is up. A table that no longer matches the setup SQL is not reported on the dashboard, because Snowflake accepts the batch and rejects the rows afterwards. The user's default role needs `USAGE` on the database and schema and `SELECT, INSERT` on the table.
 
 ## Kafka topics
 

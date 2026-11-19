@@ -550,6 +550,47 @@ def test_insert__append_unauthorised__exchanges_a_new_token_next_time(
 
 
 @pytest.mark.parametrize(
+    "rows_answer, hostname_requests",
+    [
+        pytest.param(
+            NewConnectionError(None, "dns error"),  # type: ignore[arg-type]
+            2,
+            id="connection-failed",
+        ),
+        pytest.param(
+            HTTPResponse(body=b"<html>not found</html>", status=404),
+            2,
+            id="unknown-path",
+        ),
+        pytest.param(
+            HTTPResponse(
+                body=b'{"code":"ERR_TABLE_DOES_NOT_EXIST_NOT_AUTHORIZED"}', status=404
+            ),
+            1,
+            id="missing-table",
+        ),
+    ],
+)
+def test_insert__append_fails__looks_the_ingest_host_up_again_only_when_unreachable(
+    rows_answer: HTTPResponse | Exception,
+    hostname_requests: int,
+    pool: Any,
+    answers: dict[str, HTTPResponse | Exception],
+) -> None:
+    # Given
+    answers["rows"] = rows_answer
+    with pytest.raises(DeliveryError):
+        WAREHOUSE.insert(ROWS)
+
+    # When
+    with pytest.raises(DeliveryError):
+        WAREHOUSE.insert(ROWS)
+
+    # Then
+    assert len(_requests(pool, "hostname")) == hostname_requests
+
+
+@pytest.mark.parametrize(
     "request_name, answer, kind, detail",
     [
         pytest.param(
