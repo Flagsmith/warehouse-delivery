@@ -61,7 +61,7 @@ WAREHOUSE = SnowflakeWarehouse(
 )
 GET_POOL_MANAGER = snowflake._get_pool_manager
 ACCOUNT_HOST = "acme-prod.snowflakecomputing.com"
-INGEST_HOST = "uw43389.ingest.cdgach.snowflakecomputing.com"
+INGEST_HOST = "ab12345.ingest.example.snowflakecomputing.com"
 ROWS_URL = (
     f"https://{INGEST_HOST}/v2/streaming/data/databases/FLAGSMITH"
     "/schemas/FLAGSMITH_EXP/tables/EVENTS/rows"
@@ -129,7 +129,7 @@ def clear_caches() -> Iterator[None]:
 def answers() -> dict[str, HTTPResponse | Exception]:
     return {
         "hostname": HTTPResponse(
-            body=b"UW43389.ingest.cdgach.snowflakecomputing.com", status=200
+            body=b"AB12345.ingest.example.snowflakecomputing.com", status=200
         ),
         "token": HTTPResponse(body=b"scoped-token", status=200),
         "rows": HTTPResponse(
@@ -159,9 +159,9 @@ def pool(mocker: MockerFixture, answers: dict[str, HTTPResponse | Exception]) ->
     "account_identifier, account_host, qualified_user",
     [
         pytest.param(
-            "XMIPIIN-IF45918",
-            "xmipiin-if45918.snowflakecomputing.com",
-            "XMIPIIN-IF45918.FLAGSMITH_SERVICE",
+            "MYORG-MYACCOUNT",
+            "myorg-myaccount.snowflakecomputing.com",
+            "MYORG-MYACCOUNT.FLAGSMITH_SERVICE",
             id="organisation-account",
         ),
         pytest.param(
